@@ -74,11 +74,6 @@ Conf/
 └── README.md                 # Este arquivo
 ```
 
-## 👥 Grupo TCC
-
-- Membro 1
-- Membro 2
-- Membro 3
 
 ## 📝 Notas Importantes
 
