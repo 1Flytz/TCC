@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PyConfer — Conferência automatizada de guias</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topo">
+    <div class="topo-conteudo">
+      <div>
+        <h1>PyConfer</h1>
+        <p class="subtitulo">Conferência automatizada de código e valor em guias financeiras</p>
+      </div>
+      <a class="link-api" href="/docs" target="_blank" rel="noopener">Documentação da API ↗</a>
+    </div>
+  </header>
+
+  <main>
+    <!-- ETAPA 1: envio dos arquivos -->
+    <section class="cartao" id="cartao-envio">
+      <h2>1. Selecione os documentos</h2>
+      <form id="formulario">
+        <div class="campos">
+          <label class="campo">
+            <span class="rotulo">PDF das guias (boletos)</span>
+            <input type="file" name="boletos" accept="application/pdf" required>
+          </label>
+          <label class="campo">
+            <span class="rotulo">PDF de consulta (lista mestre)</span>
+            <input type="file" name="consulta" accept="application/pdf" required>
+          </label>
+          <label class="campo campo-estreito">
+            <span class="rotulo">Resolução (DPI)</span>
+            <select name="dpi">
+              <option value="500" selected>500 — precisão máxima</option>
+              <option value="300">300 — equilibrado</option>
+              <option value="200">200 — rápido (demonstração)</option>
+            </select>
+          </label>
+        </div>
+        <button type="submit" id="botao-iniciar">Iniciar auditoria</button>
+      </form>
+      <p class="aviso" id="aviso"></p>
+    </section>
+
+    <!-- ETAPA 2: acompanhamento -->
+    <section class="painel" id="painel" hidden>
+      <div class="indicadores">
+        <div class="indicador">
+          <span class="indicador-valor" id="ind-processadas">0</span>
+          <span class="indicador-rotulo">Páginas conferidas</span>
+        </div>
+        <div class="indicador ok">
+          <span class="indicador-valor" id="ind-conformes">0</span>
+          <span class="indicador-rotulo">Conformes</span>
+        </div>
+        <div class="indicador erro">
+          <span class="indicador-valor" id="ind-divergentes">0</span>
+          <span class="indicador-rotulo">Divergências</span>
+        </div>
+        <div class="indicador">
+          <span class="indicador-valor" id="ind-precisao">—</span>
+          <span class="indicador-rotulo">Taxa de conformidade</span>
+        </div>
+      </div>
+
+      <div class="barra-progresso"><div class="barra-preenchida" id="barra"></div></div>
+      <p class="situacao" id="situacao">Preparando…</p>
+
+      <div class="grade">
+        <!-- Visualização da página -->
+        <div class="cartao">
+          <div class="cabecalho-cartao">
+            <h2>Página em conferência</h2>
+            <span class="etiqueta" id="etiqueta-estrategia" hidden></span>
+          </div>
+
+          <div class="comparativo" id="comparativo" hidden>
+            <div class="comparativo-linha">
+              <span class="chave"><i class="marcador azul"></i>Código</span>
+              <span class="esperado" id="cmp-cod-esperado">—</span>
+              <span class="seta">→</span>
+              <span class="lido" id="cmp-cod-lido">—</span>
+              <span class="selo" id="cmp-cod-selo">—</span>
+            </div>
+            <div class="comparativo-linha">
+              <span class="chave"><i class="marcador verde"></i>Valor</span>
+              <span class="esperado" id="cmp-val-esperado">—</span>
+              <span class="seta">→</span>
+              <span class="lido" id="cmp-val-lido">—</span>
+              <span class="selo" id="cmp-val-selo">—</span>
+            </div>
+          </div>
+
+          <div class="visor" id="visor">
+            <p class="vazio">A imagem da guia aparecerá aqui, com destaque em<br>
+              <i class="marcador azul"></i> código e <i class="marcador verde"></i> valor localizados pelo OCR.</p>
+          </div>
+          <p class="legenda" id="legenda-visor" hidden></p>
+        </div>
+
+        <!-- Tabela de resultados -->
+        <div class="cartao">
+          <div class="cabecalho-cartao">
+            <h2>Relatório</h2>
+            <div class="acoes">
+              <label class="filtro">
+                <input type="checkbox" id="filtro-divergencias"> Só divergências
+              </label>
+              <a class="botao-secundario" id="link-csv" hidden>Baixar CSV</a>
+            </div>
+          </div>
+          <div class="tabela-envolucro">
+            <table class="tabela">
+              <thead>
+                <tr>
+                  <th>Pág.</th>
+                  <th>Código consulta</th>
+                  <th>Código OCR</th>
+                  <th>Valor consulta</th>
+                  <th>Valor OCR</th>
+                  <th>Situação</th>
+                </tr>
+              </thead>
+              <tbody id="corpo-tabela"></tbody>
+            </table>
+          </div>
+          <p class="dica">Clique em uma linha para rever a imagem daquela página.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
