@@ -40,5 +40,8 @@ Thumbs.db
 # Project specific
 *.pdf
 .env
+
+# Saida gerada pela auditoria (varia a cada execucao)
+Relatorio_Final_Python.csv
 testee/
 Pictures/
