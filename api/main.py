@@ -18,6 +18,7 @@ import queue
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 from datetime import datetime
 
@@ -44,6 +45,14 @@ AUDITORIAS: dict[str, dict] = {}
 
 _SENTINELA = object()
 
+# Cada evento de página carrega a imagem anotada em base64 (~127 KB), então um lote de
+# 250 guias soma mais de 30 MB. Os limites abaixo devolvem essa memória quando o
+# navegador vai embora no meio da auditoria ou quando o registro envelhece.
+TAMANHO_MAXIMO_FILA = 8           # eventos aguardando entrega ao navegador
+SEGUNDOS_SEM_CONSUMO = 60         # fila cheia por esse tempo => ninguém está assistindo
+TTL_AUDITORIA_SEGUNDOS = 60 * 60  # auditorias encerradas expiram depois de uma hora
+MAX_AUDITORIAS = 20               # ... ou quando o registro passa desse total
+
 
 class AuditoriaCriada(BaseModel):
     job_id: str
@@ -61,9 +70,53 @@ class ResumoAuditoria(BaseModel):
     criada_em: str
 
 
+def _esvaziar_fila(fila: queue.Queue) -> None:
+    """Descarta os eventos não entregues, liberando as imagens que eles carregam."""
+    while True:
+        try:
+            fila.get_nowait()
+        except queue.Empty:
+            return
+
+
+def _publicar_encerramento(fila: queue.Queue, item) -> None:
+    """Entrega um aviso de fim de stream mesmo que a fila esteja cheia.
+
+    Sem isso, um `put` bloqueante em fila cheia deixaria a thread da auditoria presa
+    para sempre justamente no caminho em que ninguém está consumindo.
+    """
+    try:
+        fila.put_nowait(item)
+    except queue.Full:
+        _esvaziar_fila(fila)
+        fila.put_nowait(item)
+
+
+def _limpar_auditorias_antigas() -> None:
+    """Remove auditorias já encerradas para a memória não crescer a cada execução.
+
+    Auditorias em andamento nunca são descartadas. As demais saem por idade (TTL) ou
+    quando o registro ultrapassa `MAX_AUDITORIAS`, começando pelas mais antigas.
+    """
+    agora = time.monotonic()
+    encerradas = sorted(
+        (dados["iniciada_em"], job_id)
+        for job_id, dados in AUDITORIAS.items()
+        if dados["status"] != "processando"
+    )
+
+    excedente = max(0, len(AUDITORIAS) - MAX_AUDITORIAS)
+    descartar = {job_id for _inicio, job_id in encerradas[:excedente]}
+    descartar.update(job_id for inicio, job_id in encerradas if agora - inicio > TTL_AUDITORIA_SEGUNDOS)
+
+    for job_id in descartar:
+        AUDITORIAS.pop(job_id, None)
+
+
 def _executar_auditoria(job_id: str, caminho_boletos: str, caminho_consulta: str, dpi: int, pasta_temp: str):
     """Roda a auditoria em thread separada, publicando cada página na fila do job."""
     auditoria = AUDITORIAS[job_id]
+    fila = auditoria["fila"]
     try:
         for evento in engine.realizar_auditoria_stream(caminho_boletos, caminho_consulta, dpi=dpi):
             if evento["tipo"] == "pagina":
@@ -74,13 +127,22 @@ def _executar_auditoria(job_id: str, caminho_boletos: str, caminho_consulta: str
                     auditoria["divergentes"] += 1
             elif evento["tipo"] == "inicio":
                 auditoria["total_paginas"] = evento["total_paginas"]
-            auditoria["fila"].put(evento)
+
+            try:
+                fila.put(evento, timeout=SEGUNDOS_SEM_CONSUMO)
+            except queue.Full:
+                # Um navegador conectado esvazia a fila em milissegundos; se ela ficou
+                # cheia todo esse tempo, a aba foi fechada. Interrompe a auditoria em vez
+                # de seguir acumulando dezenas de MB de imagens que ninguém vai ver.
+                auditoria["status"] = "abandonada"
+                _esvaziar_fila(fila)
+                return
         auditoria["status"] = "concluida"
     except Exception as e:  # noqa: BLE001 - o erro precisa chegar ao front-end
         auditoria["status"] = "erro"
-        auditoria["fila"].put({"tipo": "erro", "mensagem": f"{type(e).__name__}: {e}"})
+        _publicar_encerramento(fila, {"tipo": "erro", "mensagem": f"{type(e).__name__}: {e}"})
     finally:
-        auditoria["fila"].put(_SENTINELA)
+        _publicar_encerramento(fila, _SENTINELA)
         shutil.rmtree(pasta_temp, ignore_errors=True)
 
 
@@ -106,15 +168,19 @@ async def criar_auditoria(
         with open(destino, "wb") as saida:
             shutil.copyfileobj(arquivo.file, saida)
 
+    _limpar_auditorias_antigas()
+
     job_id = uuid.uuid4().hex[:12]
     AUDITORIAS[job_id] = {
-        "fila": queue.Queue(),
+        "fila": queue.Queue(maxsize=TAMANHO_MAXIMO_FILA),
         "relatorio": [],
         "status": "processando",
         "total_paginas": None,
         "conformes": 0,
         "divergentes": 0,
         "criada_em": datetime.now().isoformat(timespec="seconds"),
+        # Relógio monotônico: usado só para medir idade, imune a ajuste de horário.
+        "iniciada_em": time.monotonic(),
     }
 
     threading.Thread(
