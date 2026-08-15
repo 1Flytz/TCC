@@ -57,24 +57,41 @@ def test_codigo_que_nao_termina_em_zero_nunca_confere():
     assert engine.status_codigo("12345", "12345") == "DIFERENTE"
 
 
-def test_uma_confusao_prevista_de_ocr_e_tolerada():
-    """1 e 7 se confundem no OCR; uma troca sozinha não deve virar falso alarme."""
-    assert engine.status_codigo("116110", "116170") == "OK"
+@pytest.mark.parametrize("lido, esperado, confusao", [
+    ("116110", "116170", "1 lido como 7"),
+    ("113640", "113840", "6 lido como 8"),
+    ("119000", "119090", "0 lido como 9"),
+    ("116110", "116770", "dois 1 lidos como 7"),
+])
+def test_confusao_de_ocr_e_apontada_em_vez_de_absorvida(lido, esperado, confusao):
+    """A comparação é exata de propósito — ver o docstring de `status_codigo`.
 
-
-def test_tres_confusoes_ja_nao_sao_toleradas():
-    assert engine.status_codigo("111770", "777770") == "DIFERENTE"
-
-
-def test_tolerancia_pode_igualar_dois_cadastros_reais():
-    """ALERTA: são aceitas até DUAS trocas, o bastante para transformar um código
-    válido em outro código válido.
-
-    116110 e 116770 são cadastros distintos, mas a conferência os dá como iguais —
-    ou seja, uma divergência real pode passar batida. Reduzir para uma troca só
-    tornaria a auditoria mais conservadora; este é o teste que muda junto.
+    Estes quatro pares são cadastros que existem de verdade no lote de referência.
+    Quando havia tolerância a confusões de OCR, todos passavam como conformes: uma
+    divergência real sumia sem ninguém ver.
     """
-    assert engine.status_codigo("116110", "116770") == "OK"
+    assert engine.status_codigo(lido, esperado) == "DIFERENTE", confusao
+
+
+def test_nenhum_par_de_cadastros_distintos_pode_ser_dado_como_igual():
+    """Trava de regressão para a tolerância que foi removida.
+
+    Passa por todos os pares de códigos do lote de referência e exige que dois
+    cadastros diferentes nunca sejam considerados o mesmo. Antes da mudança havia
+    50 pares assim.
+    """
+    from itertools import combinations
+
+    codigos = [
+        "113640", "113840", "116110", "116170", "116770", "116250", "118250",
+        "116700", "118700", "116810", "118870", "119000", "119090", "118680",
+        "118860", "118880", "117510", "117570",
+    ]
+    colisoes = [
+        (a, b) for a, b in combinations(codigos, 2)
+        if engine.status_codigo(a, b) == "OK"
+    ]
+    assert colisoes == []
 
 
 # ==========================================
