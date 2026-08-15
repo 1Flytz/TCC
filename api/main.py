@@ -16,6 +16,7 @@ import io
 import json
 import queue
 import shutil
+import sqlite3
 import tempfile
 import threading
 import time
@@ -28,7 +29,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from core import engine
+from core import armazenamento, engine
 
 app = FastAPI(
     title="PyConfer API",
@@ -39,8 +40,11 @@ app = FastAPI(
     ),
 )
 
-# Registro de auditorias em memória. Suficiente para o uso local previsto;
-# a persistência em banco é responsabilidade da frente de Dados do grupo.
+armazenamento.criar_esquema()
+
+# Auditorias vivas. A memória atende quem está acompanhando agora (é dela que sai o
+# stream); o histórico durável fica no SQLite, e é de lá que vêm as consultas a
+# auditorias antigas, já descartadas daqui.
 AUDITORIAS: dict[str, dict] = {}
 
 _SENTINELA = object()
@@ -60,6 +64,16 @@ class AuditoriaCriada(BaseModel):
     mensagem: str
 
 
+class AuditoriaNoHistorico(BaseModel):
+    job_id: str
+    criada_em: str
+    status: str
+    total_paginas: int | None
+    paginas_processadas: int
+    conformes: int
+    divergentes: int
+
+
 class ResumoAuditoria(BaseModel):
     job_id: str
     status: str
@@ -68,6 +82,19 @@ class ResumoAuditoria(BaseModel):
     conformes: int
     divergentes: int
     criada_em: str
+
+
+def _persistir(operacao, *args) -> None:
+    """Grava no histórico sem deixar uma falha de banco derrubar a auditoria.
+
+    A conferência acontece em memória e é entregue pelo stream; o histórico é um
+    complemento. Se o SQLite falhar, o operador ainda termina o trabalho e baixa o
+    CSV — o que se perde é o registro, e isso aparece no log.
+    """
+    try:
+        operacao(*args)
+    except sqlite3.Error as e:
+        print(f"[historico] falha em {operacao.__name__}: {e}")
 
 
 def _esvaziar_fila(fila: queue.Queue) -> None:
@@ -125,8 +152,12 @@ def _executar_auditoria(job_id: str, caminho_boletos: str, caminho_consulta: str
                     auditoria["conformes"] += 1
                 elif evento["linha"]["Status Geral"] == "ERRO":
                     auditoria["divergentes"] += 1
+                # Grava guia a guia: se a auditoria for interrompida, o que já foi
+                # conferido continua registrado.
+                _persistir(armazenamento.salvar_pagina, job_id, evento["linha"])
             elif evento["tipo"] == "inicio":
                 auditoria["total_paginas"] = evento["total_paginas"]
+                _persistir(armazenamento.atualizar_status, job_id, "processando", evento["total_paginas"])
 
             try:
                 fila.put(evento, timeout=SEGUNDOS_SEM_CONSUMO)
@@ -142,6 +173,8 @@ def _executar_auditoria(job_id: str, caminho_boletos: str, caminho_consulta: str
         auditoria["status"] = "erro"
         _publicar_encerramento(fila, {"tipo": "erro", "mensagem": f"{type(e).__name__}: {e}"})
     finally:
+        # `auditoria["status"]` já reflete o desfecho: concluida, erro ou abandonada.
+        _persistir(armazenamento.atualizar_status, job_id, auditoria["status"])
         _publicar_encerramento(fila, _SENTINELA)
         shutil.rmtree(pasta_temp, ignore_errors=True)
 
@@ -182,6 +215,10 @@ async def criar_auditoria(
         # Relógio monotônico: usado só para medir idade, imune a ajuste de horário.
         "iniciada_em": time.monotonic(),
     }
+    _persistir(
+        armazenamento.registrar_auditoria,
+        job_id, AUDITORIAS[job_id]["criada_em"], dpi, boletos.filename, consulta.filename,
+    )
 
     threading.Thread(
         target=_executar_auditoria,
@@ -190,6 +227,16 @@ async def criar_auditoria(
     ).start()
 
     return AuditoriaCriada(job_id=job_id, mensagem="Auditoria iniciada. Acompanhe pelo endpoint de eventos.")
+
+
+@app.get("/api/v1/auditorias", response_model=list[AuditoriaNoHistorico], tags=["Auditoria"])
+def listar_auditorias(limite: int = 50):
+    """Histórico das auditorias já realizadas, da mais recente para a mais antiga.
+
+    Sobrevive ao reinício do servidor — é a base para acompanhar a acurácia do
+    motor ao longo do tempo.
+    """
+    return [AuditoriaNoHistorico(**registro) for registro in armazenamento.listar_auditorias(limite)]
 
 
 @app.get("/api/v1/auditorias/{job_id}/eventos", tags=["Auditoria"])
@@ -218,32 +265,49 @@ def acompanhar_auditoria(job_id: str):
 
 @app.get("/api/v1/auditorias/{job_id}", response_model=ResumoAuditoria, tags=["Auditoria"])
 def consultar_auditoria(job_id: str):
-    """Situação atual de uma auditoria (útil para reconectar sem reprocessar)."""
+    """Situação atual de uma auditoria (útil para reconectar sem reprocessar).
+
+    Auditorias já descartadas da memória continuam respondendo aqui, reconstruídas
+    a partir do histórico.
+    """
     auditoria = AUDITORIAS.get(job_id)
-    if not auditoria:
+    if auditoria:
+        return ResumoAuditoria(
+            job_id=job_id,
+            status=auditoria["status"],
+            paginas_processadas=len(auditoria["relatorio"]),
+            total_paginas=auditoria["total_paginas"],
+            conformes=auditoria["conformes"],
+            divergentes=auditoria["divergentes"],
+            criada_em=auditoria["criada_em"],
+        )
+
+    registro = armazenamento.carregar_resumo(job_id)
+    if not registro:
         raise HTTPException(status_code=404, detail="Auditoria não encontrada.")
-    return ResumoAuditoria(
-        job_id=job_id,
-        status=auditoria["status"],
-        paginas_processadas=len(auditoria["relatorio"]),
-        total_paginas=auditoria["total_paginas"],
-        conformes=auditoria["conformes"],
-        divergentes=auditoria["divergentes"],
-        criada_em=auditoria["criada_em"],
-    )
+    return ResumoAuditoria(**registro)
 
 
 @app.get("/api/v1/auditorias/{job_id}/relatorio.csv", tags=["Auditoria"])
 def baixar_relatorio(job_id: str):
-    """Baixa o relatório no mesmo formato gerado pelo script de linha de comando."""
+    """Baixa o relatório no mesmo formato gerado pelo script de linha de comando.
+
+    Funciona também para auditorias antigas: sem elas na memória, as linhas vêm do
+    histórico.
+    """
     auditoria = AUDITORIAS.get(job_id)
-    if not auditoria:
-        raise HTTPException(status_code=404, detail="Auditoria não encontrada.")
-    if not auditoria["relatorio"]:
+    if auditoria:
+        relatorio = auditoria["relatorio"]
+    else:
+        if not armazenamento.carregar_resumo(job_id):
+            raise HTTPException(status_code=404, detail="Auditoria não encontrada.")
+        relatorio = armazenamento.carregar_relatorio(job_id)
+
+    if not relatorio:
         raise HTTPException(status_code=409, detail="Nenhuma página processada ainda.")
 
     buffer = io.StringIO()
-    pd.DataFrame(auditoria["relatorio"], columns=engine.COLUNAS_RELATORIO).to_csv(buffer, index=False, sep=";")
+    pd.DataFrame(relatorio, columns=engine.COLUNAS_RELATORIO).to_csv(buffer, index=False, sep=";")
     return StreamingResponse(
         iter([buffer.getvalue()]),
         media_type="text/csv",

@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api import main
+from core import armazenamento
 
 
 @pytest.fixture(autouse=True)
@@ -202,6 +203,66 @@ def test_relatorio_antes_da_primeira_pagina_responde_409(cliente):
     resposta = cliente.get("/api/v1/auditorias/recem_criada/relatorio.csv")
 
     assert resposta.status_code == 409
+
+
+def test_auditoria_fora_da_memoria_ainda_responde_pelo_historico(cliente):
+    """Expirar da memória não pode significar sumir: o histórico assume.
+
+    Antes da persistência, uma auditoria descartada por idade ou volume passava a
+    devolver 404 e o CSV se perdia junto.
+    """
+    armazenamento.registrar_auditoria("antiga", "2026-08-15T18:00:00", 500, "b.pdf", "c.pdf")
+    armazenamento.atualizar_status("antiga", "concluida", 2)
+    for pagina, situacao in ((1, "OK"), (2, "ERRO")):
+        armazenamento.salvar_pagina("antiga", {
+            "Pagina": pagina,
+            "Codigo (PDF Consulta)": "113640",
+            "Codigo (OCR Boletos)": "113640",
+            "Status Codigo": "OK",
+            "Valor (PDF Consulta)": "76,82",
+            "Valor (OCR Boletos)": "76,82",
+            "Status Valor": "OK",
+            "Status Geral": situacao,
+        })
+
+    assert "antiga" not in main.AUDITORIAS, "o teste só vale com a auditoria fora da memória"
+
+    resumo = cliente.get("/api/v1/auditorias/antiga").json()
+    assert resumo["status"] == "concluida"
+    assert resumo["paginas_processadas"] == 2
+    assert resumo["conformes"] == 1
+    assert resumo["divergentes"] == 1
+
+    csv = cliente.get("/api/v1/auditorias/antiga/relatorio.csv")
+    assert csv.status_code == 200
+    assert "113640" in csv.text
+
+
+def test_historico_lista_as_auditorias(cliente):
+    armazenamento.registrar_auditoria("j1", "2026-08-10T09:00:00", 500, "b.pdf", "c.pdf")
+    armazenamento.registrar_auditoria("j2", "2026-08-15T09:00:00", 300, "b.pdf", "c.pdf")
+
+    historico = cliente.get("/api/v1/auditorias").json()
+
+    assert [item["job_id"] for item in historico] == ["j2", "j1"]
+
+
+def test_memoria_tem_prioridade_sobre_o_historico(cliente):
+    """Enquanto a auditoria está viva, o número em tempo real é o que vale."""
+    armazenamento.registrar_auditoria("viva", "2026-08-15T18:00:00", 500, "b.pdf", "c.pdf")
+    main.AUDITORIAS["viva"] = _auditoria(
+        "processando",
+        relatorio=[{"Pagina": 1}],
+        total_paginas=50,
+        conformes=1,
+        divergentes=0,
+        criada_em="2026-08-15T18:00:00",
+    )
+
+    resumo = cliente.get("/api/v1/auditorias/viva").json()
+
+    assert resumo["paginas_processadas"] == 1, "veio do banco, que ainda está sem páginas"
+    assert resumo["total_paginas"] == 50
 
 
 def test_resumo_reflete_o_andamento(cliente):
