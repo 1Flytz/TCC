@@ -31,7 +31,7 @@ contrato de dados (JSON da API) como ponto de integração.
 - Consolidação do Capítulo 3 (metodologia, diagramas UML de arquitetura, casos de uso e
   sequência).
 - Justificativa técnica das escolhas de cada parte (FastAPI, banco de dados, front-end).
-- Cada membro escreve o trecho técnico da própria parte; este papel costura tudo em um texto
+- Escreve o trecho técnico das partes; este papel costura tudo em um texto
   coeso e cuida do README final / roteiro de demonstração para a banca.
 
 ## 🔗 Ordem de dependência
