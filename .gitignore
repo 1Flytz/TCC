@@ -43,5 +43,10 @@ Thumbs.db
 
 # Saida gerada pela auditoria (varia a cada execucao)
 Relatorio_Final_Python.csv
+
+# Historico local das auditorias (SQLite; -wal e -shm sao gerados pelo modo WAL)
+pyconfer.db
+pyconfer.db-wal
+pyconfer.db-shm
 testee/
 Pictures/

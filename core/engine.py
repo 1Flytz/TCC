@@ -80,19 +80,41 @@ def extrair_lista_mestre(caminho_consulta):
     return dados_encontrados
 
 
+def _sufixo_comparavel(codigo: str) -> str:
+    """Isola o trecho do código que entra na comparação.
+
+    Os cadastros têm 5 ou 6 dígitos e terminam em 0 (o `-0` do PDF de consulta).
+    Só esse sufixo é comparado, porque o OCR lê a linha digitável inteira — com
+    zeros à esquerda e outros números em volta.
+    """
+    for tamanho in (6, 5):
+        sufixo = codigo[-tamanho:]
+        if len(sufixo) == tamanho and sufixo.endswith("0"):
+            return sufixo
+    return ""
+
+
 def status_codigo(cod_lido: str, cod_esp: str):
-    if not cod_lido or not cod_esp or cod_esp == "N/A": return "DIFERENTE"
+    """Diz se o código lido na guia corresponde ao esperado na lista mestre.
 
-    suf_lido = cod_lido[-6:] if (len(cod_lido[-6:]) == 6 and cod_lido[-6:].endswith("0")) else (cod_lido[-5:] if (len(cod_lido[-5:]) == 5 and cod_lido[-5:].endswith("0")) else "")
-    suf_esp = cod_esp[-6:] if (len(cod_esp[-6:]) == 6 and cod_esp[-6:].endswith("0")) else (cod_esp[-5:] if (len(cod_esp[-5:]) == 5 and cod_esp[-5:].endswith("0")) else "")
+    A comparação é exata, de propósito. Já houve aqui uma tolerância a confusões
+    típicas de OCR (8/6, 0/9, 1/7) que aceitava até duas trocas de dígito, mas no
+    lote de referência existem 50 pares de cadastros distintos separados por
+    exatamente essas trocas — `113640`/`113840` e `119000`/`119090`, entre outros.
+    Tolerá-las fazia uma divergência real ser reportada como conforme, em silêncio,
+    que é justamente o erro que esta ferramenta existe para evitar.
 
-    if suf_lido and suf_esp:
-        if suf_lido == suf_esp: return "OK"
-        pares_confusos = {('8', '6'), ('6', '8'), ('0', '9'), ('9', '0'), ('1', '7'), ('7', '1'), ('5', 'S'), ('S', '5'), ('2', 'Z'), ('Z', '2')}
-        if len(suf_lido) == len(suf_esp):
-            difs = [(x, y) for x, y in zip(suf_lido, suf_esp) if x != y]
-            if len(difs) <= 2 and all(d in pares_confusos for d in difs): return "OK"
-    return "DIFERENTE"
+    Ruído de leitura já é filtrado antes, na votação entre as 8 estratégias de
+    imagem. O que escapar vira DIVERGENTE e o operador confirma na imagem
+    destacada — um falso alarme custa segundos; uma divergência perdida, não.
+    """
+    if not cod_lido or not cod_esp or cod_esp == "N/A":
+        return "DIFERENTE"
+
+    suf_lido = _sufixo_comparavel(cod_lido)
+    suf_esp = _sufixo_comparavel(cod_esp)
+
+    return "OK" if (suf_lido and suf_lido == suf_esp) else "DIFERENTE"
 
 
 def normalizar_valor(texto_extraido: str):
