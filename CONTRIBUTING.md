@@ -1,53 +1,118 @@
 # Contribuindo com o PyConfer
 
-Este documento organiza a divisão de trabalho do grupo para o TCC. O objetivo é que cada
-membro consiga trabalhar na sua frente sem depender do andamento dos outros, usando o
-contrato de dados (JSON da API) como ponto de integração.
+Este documento organiza a divisão de trabalho do grupo. O objetivo é que cada membro
+trabalhe na sua frente sem depender do andamento dos outros, usando o contrato de dados
+(o JSON da API) como ponto de integração.
+
+## 📍 Onde o projeto está
+
+A **primeira fase está concluída**: o motor de conferência, a API REST, a persistência do
+histórico e uma interface Web funcional. A aplicação confere um lote completo de guias,
+mostra o resultado em tempo real, destaca na imagem de onde cada dado foi lido, classifica
+as divergências e exporta o laudo. Há 80 testes automatizados cobrindo o motor, o ciclo de
+vida das auditorias e o banco.
+
+O que existe hoje é um protótipo **local e monousuário**. Foi decisão consciente: sem
+certeza de que a conferência está correta, distribuir o sistema para uma equipe apenas
+multiplicaria o erro.
+
+## 🎯 A meta da próxima fase
+
+**Tornar o PyConfer colaborativo.** É a maior lacuna entre o que o Capítulo 1 promete —
+uma plataforma para equipes — e o que a aplicação faz hoje.
+
+Essa meta foi escolhida porque exige as três frentes ao mesmo tempo: banco de dados
+compartilhado, autenticação na API e telas por usuário. Cada frente abaixo tem trabalho
+próprio e um ponto de partida que **não depende de ninguém**.
 
 ## 👥 Divisão de responsabilidades
 
-### 1. Backend / Core Engine + API — Felipe
-- Motor de extração e conferência (`conferidor.py`): OCR, algoritmo de consenso, matching código/valor.
-- Encapsulamento em API REST (FastAPI), com documentação automática via Swagger.
-- **Entregável para o resto do grupo:** o contrato JSON de request/response (documentado no
-  Swagger). É a partir dele que o Front-end e a camada de Dados podem trabalhar em paralelo,
-  mesmo antes do motor estar 100% estável.
+### 1. Motor e API — Felipe
 
-### 2. Front-end / Dashboard — [nome do colega]
-- Tela de upload dos PDFs (boletos + consulta).
-- Visualização dos resultados por página (status OK / DIFERENTE / ERRO), com destaque para
-  divergências.
-- Pode começar com um JSON de exemplo (mock) fornecido pelo backend, sem esperar a API real
-  estar pronta.
+Dono do `core/` e do `api/`, e do contrato de dados que as outras frentes consomem.
 
-### 3. Dados / Persistência + QA — [nome do colega]
-- Modelagem do banco de dados para histórico de auditorias (por lote, por página, timestamps).
-- Testes automatizados do motor (`status_codigo`, `extrair_lista_mestre`, casos de borda).
-- Métricas de acurácia (precisão/recall) comparando o resultado automatizado com conferência
-  manual — esse dado sustenta os resultados do Capítulo 3 da monografia.
-- Pode começar direto em cima do código atual, sem depender da API estar pronta.
+- Validação do **dígito verificador** da linha digitável
+- **Autenticação** na API (o front-end depende disso)
+- **Endpoints de métricas** (o painel depende disso)
+- Medição comparativa com a **conferência manual** — o número que falta para fechar o
+  objetivo geral do trabalho
 
-### 4. Documentação Acadêmica + Integração — [nome do colega]
-- Consolidação do Capítulo 3 (metodologia, diagramas UML de arquitetura, casos de uso e
-  sequência).
-- Justificativa técnica das escolhas de cada parte (FastAPI, banco de dados, front-end).
-- Escreve o trecho técnico das partes; este papel costura tudo em um texto
-  coeso e cuida do README final / roteiro de demonstração para a banca.
+**Regra de ouro:** quando outra frente precisar de um dado novo, ela pede. Ninguém altera
+o motor ou a API por conta própria.
 
-## 🔗 Ordem de dependência
+### 2. Banco de dados — [nome do colega]
 
-1. Backend define e publica o contrato JSON (mesmo com o motor ainda instável).
-2. Front-end e Dados/QA trabalham em paralelo em cima do contrato.
-3. Documentação consolida o trabalho de todos ao final — mas pode começar o esqueleto do
-   capítulo desde já.
+Hoje o projeto usa SQLite, com duas tabelas, guardando apenas o histórico das conferências.
+
+- Migrar para **PostgreSQL ou MySQL** — requisito para múltiplos usuários e o que o
+  Capítulo 2 originalmente previa
+- Modelar **usuários e permissões**: quem executou cada auditoria, quem enxerga o quê
+- **Persistir a lista mestre**, que hoje é lida do PDF a cada execução e descartada
+- Consultas de **métricas**: acurácia ao longo do tempo, por lote, por operador
+- Política de **retenção e backup** — são dados de contribuinte, e isso pesa na avaliação
+
+**Comece por:** desenhar o modelo de dados novo e comparar com o atual (`core/armazenamento.py`).
+Não depende de ninguém.
+
+### 3. Front-end — [nome do colega]
+
+A interface atual é JavaScript puro, sem framework nem etapa de compilação. Foi construída
+como **base**, não como produto final.
+
+- Tela de **login** e sessão
+- **Painel de métricas**: conformidade ao longo do tempo, lotes com mais divergência
+- Fluxo de **revisão**: marcar uma divergência como conferida, registrar observação — hoje
+  o operador confere e nada fica registrado
+- Decidir entre migrar para **React ou Vue** ou manter JavaScript puro — e **justificar a
+  escolha por escrito**, porque essa justificativa entra na monografia
+
+**Comece por:** desenhar as telas novas e listar de quais dados cada uma precisa. Os
+endpoints vêm depois; o desenho não espera.
+
+### 4. Documentação — [nome do colega]
+
+- As **sete figuras** marcadas em amarelo no documento: quatro diagramas (casos de uso,
+  sequência, classes, arquitetura) e três capturas de tela
+- **Conferir as catorze referências**, uma a uma, abrindo cada link
+- Limpeza no Word: atualizar o sumário, aplicar legendas de verdade na Tabela 1 e no
+  Quadro 1, corrigir o título órfão da seção 1.3
+- Escrever as seções técnicas **do trabalho das outras frentes**, conforme cada parte fica
+  pronta
+- Manter o Capítulo 3 em dia
+
+**Comece por:** conferir a bibliografia. Se alguma referência não se confirmar, o texto
+muda — melhor descobrir antes de diagramar.
+
+## 🔒 Duas regras para não quebrar o que funciona
+
+Três pessoas mexendo num sistema que já roda é risco real. Duas práticas resolvem:
+
+**1. Cada frente na sua branch, integrada por pull request.** Ninguém envia direto para a
+`main`.
+
+**2. Os testes têm que passar antes de qualquer merge:**
+
+```bash
+python -m pytest
+```
+
+Se quebrou, não entra. A suíte roda em cerca de dois segundos e já pegou erro real de
+lógica neste projeto — não é formalidade.
+
+## 🖼️ O princípio da interface
+
+Uma decisão de projeto que orienta tudo na camada visual e **não deve ser abandonada**:
+
+> O auditor precisa enxergar **de onde** o sistema tirou cada informação, não apenas qual
+> foi o resultado.
+
+É por isso que a tela mostra a imagem da própria guia com retângulos marcando as regiões
+lidas. Diante de uma divergência, o operador confirma em segundos sem reabrir o documento
+original. Qualquer tela nova deve orbitar esse princípio, não competir com ele.
 
 ## 💻 Ambiente de execução
 
-Por enquanto o projeto roda **localmente** (sem deploy). Cada membro clona o repositório e
-segue o setup do `README.md`. Como o código é compartilhado apenas entre o grupo, não há
-necessidade de autenticação ou hospedagem externa nesta fase.
-
-## 🎯 Nota pessoal
-
-<!-- Felipe: descreva aqui a sua visão de como quer que a demonstração/visualização
-     do app funcione, para alinhar com o grupo antes de começarem a construir em cima disso. -->
+O projeto roda **localmente**, sem deploy. Cada membro clona o repositório e segue o setup
+do `README.md`. Os documentos contêm dados sigilosos de contribuintes e, por isso, não são
+versionados nem enviados a serviços externos — restrição que vale também para a fase
+colaborativa, quando o banco passar a rodar em servidor próprio.
