@@ -184,6 +184,24 @@ def test_job_desconhecido_responde_404(cliente, caminho):
     assert resposta.json()["detail"] == "Auditoria não encontrada."
 
 
+def test_post_devolve_apenas_job_id_e_mensagem(cliente):
+    """O contrato do POST não promete o total da consulta.
+
+    O campo existia e voltava sempre `null`, o que induzia quem consome a API a
+    esperar um número. Esse total chega no evento `inicio` do stream.
+    """
+    resposta = cliente.post(
+        "/api/v1/auditorias",
+        files={
+            "boletos": ("boletos.pdf", b"%PDF-1.4", "application/pdf"),
+            "consulta": ("consulta.pdf", b"%PDF-1.4", "application/pdf"),
+        },
+    )
+
+    assert resposta.status_code == 200
+    assert set(resposta.json()) == {"job_id", "mensagem"}
+
+
 def test_upload_que_nao_e_pdf_e_recusado(cliente):
     resposta = cliente.post(
         "/api/v1/auditorias",

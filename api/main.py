@@ -60,7 +60,6 @@ MAX_AUDITORIAS = 20               # ... ou quando o registro passa desse total
 
 class AuditoriaCriada(BaseModel):
     job_id: str
-    total_consulta: int | None = None
     mensagem: str
 
 
@@ -187,7 +186,10 @@ async def criar_auditoria(
 ):
     """Recebe os dois PDFs e inicia a auditoria em segundo plano.
 
-    Retorna imediatamente um `job_id`; o acompanhamento é feito pelo endpoint de eventos.
+    Retorna imediatamente um `job_id`; o acompanhamento é feito pelo endpoint de
+    eventos. O total de lançamentos lidos na consulta chega no primeiro evento do
+    stream (`inicio`) — apurá-lo aqui custaria reler o PDF de consulta (~1,3 s) para
+    adiantar um número que o stream entrega logo em seguida.
     """
     for arquivo in (boletos, consulta):
         if not (arquivo.filename or "").lower().endswith(".pdf"):
