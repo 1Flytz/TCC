@@ -101,11 +101,117 @@ function encerrar(jobId, houveResultado) {
   botaoIniciar.disabled = false;
   botaoIniciar.textContent = "Iniciar nova auditoria";
   if (houveResultado) {
-    const link = $("link-csv");
-    link.href = `/api/v1/auditorias/${jobId}/relatorio.csv`;
-    link.hidden = false;
+    mostrarLinkCsv(jobId);
+  }
+  carregarHistorico();
+}
+
+function mostrarLinkCsv(jobId) {
+  const link = $("link-csv");
+  link.href = `/api/v1/auditorias/${jobId}/relatorio.csv`;
+  link.hidden = false;
+}
+
+/* =========================================================
+   Histórico — auditorias já encerradas, vindas do banco
+   ========================================================= */
+
+const ROTULOS_SITUACAO = {
+  concluida: ["Concluída", "ok"],
+  processando: ["Em andamento", ""],
+  abandonada: ["Interrompida", ""],
+  erro: ["Falhou", "erro"],
+};
+
+function formatarMomento(iso) {
+  const data = new Date(iso);
+  if (isNaN(data)) return iso;
+  const doisDigitos = (n) => String(n).padStart(2, "0");
+  return `${doisDigitos(data.getDate())}/${doisDigitos(data.getMonth() + 1)}/${data.getFullYear()}` +
+    ` ${doisDigitos(data.getHours())}:${doisDigitos(data.getMinutes())}`;
+}
+
+async function carregarHistorico() {
+  let auditorias;
+  try {
+    const resposta = await fetch("/api/v1/auditorias");
+    if (!resposta.ok) return;
+    auditorias = await resposta.json();
+  } catch {
+    return; // histórico é acessório: se falhar, a conferência continua utilizável
+  }
+
+  const corpo = $("corpo-historico");
+  corpo.innerHTML = "";
+  $("cartao-historico").hidden = auditorias.length === 0;
+
+  for (const auditoria of auditorias) {
+    const avaliadas = auditoria.conformes + auditoria.divergentes;
+    const taxa = avaliadas ? `${((auditoria.conformes / avaliadas) * 100).toFixed(1)}%` : "—";
+    const [rotulo, classe] = ROTULOS_SITUACAO[auditoria.status] || [auditoria.status, ""];
+
+    const tr = document.createElement("tr");
+    tr.className = "linha-historico";
+    tr.innerHTML = `
+      <td>${formatarMomento(auditoria.criada_em)}</td>
+      <td><span class="selo ${classe}">${rotulo}</span></td>
+      <td>${auditoria.paginas_processadas}${auditoria.total_paginas ? ` / ${auditoria.total_paginas}` : ""}</td>
+      <td>${auditoria.conformes}</td>
+      <td class="${auditoria.divergentes ? "divergencia" : ""}">${auditoria.divergentes}</td>
+      <td>${taxa}</td>
+    `;
+    tr.addEventListener("click", () => abrirAuditoria(auditoria));
+    corpo.appendChild(tr);
   }
 }
+
+async function abrirAuditoria(auditoria) {
+  if (fonteEventos) return; // não atropela uma conferência em andamento
+
+  let linhas;
+  try {
+    const resposta = await fetch(`/api/v1/auditorias/${auditoria.job_id}/paginas`);
+    if (!resposta.ok) throw new Error("Não foi possível carregar essa auditoria.");
+    linhas = await resposta.json();
+  } catch (erro) {
+    aviso.textContent = erro.message;
+    return;
+  }
+
+  reiniciarPainel();
+  contadores.total = auditoria.total_paginas;
+
+  for (const linha of linhas) {
+    // As páginas do histórico não têm imagem: só o motor a produz, ao vivo.
+    const evento = { pagina: linha["Pagina"], linha };
+    const divergente = linha["Status Geral"] === "ERRO";
+
+    contadores.processadas += 1;
+    if (linha["Status Geral"] === "OK") contadores.conformes += 1;
+    if (divergente) contadores.divergentes += 1;
+
+    paginas.set(evento.pagina, evento);
+    adicionarLinha(evento, divergente);
+  }
+
+  atualizarIndicadores();
+  barra.style.width = "100%";
+  situacao.textContent = `Auditoria de ${formatarMomento(auditoria.criada_em)} — ` +
+    `${contadores.processadas} guias, reaberta do histórico.`;
+
+  if (linhas.length) {
+    mostrarLinkCsv(auditoria.job_id);
+    mostrarPagina(linhas[0]["Pagina"]);
+  }
+
+  // Depois de mostrarPagina, que sobrescreveria o visor com o aviso genérico.
+  visor.innerHTML = '<p class="vazio">A imagem com os destaques do OCR não é guardada:<br>' +
+    'ela aparece apenas durante a conferência ao vivo.</p>';
+  $("legenda-visor").hidden = true;
+}
+
+$("botao-atualizar-historico").addEventListener("click", carregarHistorico);
+carregarHistorico();
 
 function registrarPagina(evento) {
   const linha = evento.linha;

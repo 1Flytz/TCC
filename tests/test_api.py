@@ -256,6 +256,46 @@ def test_auditoria_fora_da_memoria_ainda_responde_pelo_historico(cliente):
     assert "113640" in csv.text
 
 
+def test_paginas_de_auditoria_antiga_vem_do_historico(cliente):
+    """Endpoint que o front-end usa para reabrir uma auditoria já encerrada."""
+    armazenamento.registrar_auditoria("passada", "2026-08-15T18:00:00", 500, "b.pdf", "c.pdf")
+    armazenamento.salvar_pagina("passada", {
+        "Pagina": 47,
+        "Codigo (PDF Consulta)": "116110",
+        "Codigo (OCR Boletos)": "716110",
+        "Status Codigo": "DIFERENTE",
+        "Valor (PDF Consulta)": "76,82",
+        "Valor (OCR Boletos)": "76,82",
+        "Status Valor": "OK",
+        "Status Geral": "ERRO",
+    })
+
+    linhas = cliente.get("/api/v1/auditorias/passada/paginas").json()
+
+    assert len(linhas) == 1
+    assert linhas[0]["Pagina"] == 47
+    assert linhas[0]["Codigo (OCR Boletos)"] == "716110"
+    assert "imagem" not in linhas[0], "a imagem anotada não é persistida"
+
+
+def test_paginas_de_auditoria_viva_vem_da_memoria(cliente):
+    main.AUDITORIAS["viva"] = _auditoria("processando", relatorio=[{"Pagina": 1}])
+
+    assert cliente.get("/api/v1/auditorias/viva/paginas").json() == [{"Pagina": 1}]
+
+
+def test_paginas_de_job_desconhecido_responde_404(cliente):
+    assert cliente.get("/api/v1/auditorias/naoexiste/paginas").status_code == 404
+
+
+def test_front_end_e_servido_sem_cache(cliente):
+    """Sem isso o navegador reaproveita o app.js antigo e a alteração some."""
+    resposta = cliente.get("/app.js")
+
+    assert resposta.status_code == 200
+    assert resposta.headers["cache-control"] == "no-cache"
+
+
 def test_historico_lista_as_auditorias(cliente):
     armazenamento.registrar_auditoria("j1", "2026-08-10T09:00:00", 500, "b.pdf", "c.pdf")
     armazenamento.registrar_auditoria("j2", "2026-08-15T09:00:00", 300, "b.pdf", "c.pdf")

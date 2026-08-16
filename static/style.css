@@ -295,3 +295,11 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .acoes { display: flex; align-items: center; gap: 14px; }
 .filtro { font-size: .83rem; color: var(--texto-suave); display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .dica { margin: 10px 0 0; font-size: .78rem; color: var(--texto-suave); }
+
+/* ---------- Histórico de auditorias ---------- */
+.envolucro-historico { max-height: 260px; }
+
+.linha-historico { cursor: pointer; }
+.linha-historico:hover { background: #f7f9fd; }
+
+#cartao-historico .cabecalho-cartao .botao-secundario { padding: 6px 12px; font-size: .82rem; }
