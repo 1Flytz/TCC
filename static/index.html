@@ -45,6 +45,31 @@
       <p class="aviso" id="aviso"></p>
     </section>
 
+    <!-- Auditorias anteriores (vindas do histórico em banco) -->
+    <section class="cartao" id="cartao-historico" hidden>
+      <div class="cabecalho-cartao">
+        <h2>Auditorias anteriores</h2>
+        <button type="button" class="botao-secundario" id="botao-atualizar-historico">Atualizar</button>
+      </div>
+      <div class="tabela-envolucro envolucro-historico">
+        <table class="tabela">
+          <thead>
+            <tr>
+              <th>Quando</th>
+              <th>Situação</th>
+              <th>Páginas</th>
+              <th>Conformes</th>
+              <th>Divergências</th>
+              <th>Conformidade</th>
+            </tr>
+          </thead>
+          <tbody id="corpo-historico"></tbody>
+        </table>
+      </div>
+      <p class="dica">Clique em uma auditoria para reabrir o relatório dela. A imagem com os
+        destaques do OCR existe apenas durante a conferência ao vivo.</p>
+    </section>
+
     <!-- ETAPA 2: acompanhamento -->
     <section class="painel" id="painel" hidden>
       <div class="indicadores">
@@ -93,6 +118,8 @@
               <span class="selo" id="cmp-val-selo">—</span>
             </div>
           </div>
+
+          <p class="explicacao-natureza" id="explicacao-natureza" hidden></p>
 
           <div class="visor" id="visor">
             <p class="vazio">A imagem da guia aparecerá aqui, com destaque em<br>

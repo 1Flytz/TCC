@@ -95,6 +95,68 @@ def test_nenhum_par_de_cadastros_distintos_pode_ser_dado_como_igual():
 
 
 # ==========================================
+# classificar_divergencia
+# ==========================================
+
+CADASTROS = {"115870", "118870", "116110", "116170"}
+
+
+def _resultado(codigo="115870", valor="76,82", status_codigo="OK", status_valor="OK", status_geral="ERRO"):
+    return {
+        "codigo": codigo,
+        "valor": valor,
+        "status_codigo": status_codigo,
+        "status_valor": status_valor,
+        "status_geral": status_geral,
+    }
+
+
+def test_pagina_conforme_nao_recebe_natureza():
+    resultado = _resultado(status_geral="OK")
+    assert engine.classificar_divergencia(resultado, CADASTROS) == ""
+
+
+def test_codigo_lido_de_outra_guia_do_lote_e_o_caso_grave():
+    """O OCR leu, na guia de 115870, o numero 118870 — que existe no mesmo lote.
+
+    Aconteceu de verdade, em DPI 300, na pagina 44 do lote de referencia. E o unico
+    caso com risco financeiro direto: a guia pode ter sido trocada.
+    """
+    resultado = _resultado(codigo="118870", status_codigo="DIFERENTE")
+    assert engine.classificar_divergencia(resultado, CADASTROS) == engine.NATUREZA_OUTRO_CADASTRO
+
+
+@pytest.mark.parametrize("codigo", ["0", "", None])
+def test_codigo_nao_extraido_e_falha_de_leitura(codigo):
+    resultado = _resultado(codigo=codigo, status_codigo="DIFERENTE")
+    assert engine.classificar_divergencia(resultado, CADASTROS) == engine.NATUREZA_NAO_LIDO
+
+
+def test_codigo_que_nao_existe_no_lote_fica_para_verificacao():
+    """716110 nao e cadastro de ninguem: provavel sujeira no scan (DPI 200, pag. 47)."""
+    resultado = _resultado(codigo="716110", status_codigo="DIFERENTE")
+    assert engine.classificar_divergencia(resultado, CADASTROS) == engine.NATUREZA_VERIFICAR
+
+
+def test_valor_nao_lido_com_codigo_correto():
+    resultado = _resultado(valor="0,00", status_valor="DIFERENTE")
+    assert engine.classificar_divergencia(resultado, CADASTROS) == engine.NATUREZA_NAO_LIDO
+
+
+def test_valor_diferente_com_codigo_correto_fica_para_verificacao():
+    resultado = _resultado(valor="99,99", status_valor="DIFERENTE")
+    assert engine.classificar_divergencia(resultado, CADASTROS) == engine.NATUREZA_VERIFICAR
+
+
+def test_codigo_grave_tem_prioridade_sobre_valor_nao_lido():
+    """Havendo problema nos dois campos, o do codigo e o que importa relatar."""
+    resultado = _resultado(
+        codigo="118870", valor="0,00", status_codigo="DIFERENTE", status_valor="DIFERENTE"
+    )
+    assert engine.classificar_divergencia(resultado, CADASTROS) == engine.NATUREZA_OUTRO_CADASTRO
+
+
+# ==========================================
 # normalizar_valor
 # ==========================================
 

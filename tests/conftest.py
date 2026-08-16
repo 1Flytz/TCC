@@ -20,10 +20,13 @@ from core import armazenamento  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def historico_limpo():
-    """Cada teste começa com o banco recriado do zero."""
-    for sufixo in ("", "-wal", "-shm"):
-        arquivo = armazenamento.CAMINHO_BANCO + sufixo
-        if os.path.exists(arquivo):
-            os.remove(arquivo)
+    """Cada teste começa com o histórico vazio.
+
+    Esvazia as tabelas em vez de apagar o arquivo: no Windows, remover um banco
+    SQLite que ainda tenha handle aberto levanta PermissionError.
+    """
     armazenamento.criar_esquema()
+    with armazenamento._conexao() as conexao:
+        conexao.execute("DELETE FROM pagina")
+        conexao.execute("DELETE FROM auditoria")
     yield

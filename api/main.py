@@ -60,7 +60,6 @@ MAX_AUDITORIAS = 20               # ... ou quando o registro passa desse total
 
 class AuditoriaCriada(BaseModel):
     job_id: str
-    total_consulta: int | None = None
     mensagem: str
 
 
@@ -187,7 +186,10 @@ async def criar_auditoria(
 ):
     """Recebe os dois PDFs e inicia a auditoria em segundo plano.
 
-    Retorna imediatamente um `job_id`; o acompanhamento é feito pelo endpoint de eventos.
+    Retorna imediatamente um `job_id`; o acompanhamento é feito pelo endpoint de
+    eventos. O total de lançamentos lidos na consulta chega no primeiro evento do
+    stream (`inicio`) — apurá-lo aqui custaria reler o PDF de consulta (~1,3 s) para
+    adiantar um número que o stream entrega logo em seguida.
     """
     for arquivo in (boletos, consulta):
         if not (arquivo.filename or "").lower().endswith(".pdf"):
@@ -288,6 +290,22 @@ def consultar_auditoria(job_id: str):
     return ResumoAuditoria(**registro)
 
 
+@app.get("/api/v1/auditorias/{job_id}/paginas", tags=["Auditoria"])
+def listar_paginas(job_id: str):
+    """Linhas do relatório em JSON, para reabrir uma auditoria já encerrada.
+
+    Mesmo conteúdo do CSV, no formato que a tabela do front-end consome. A imagem
+    anotada não vem junto: ela é gerada durante a conferência e não é persistida.
+    """
+    auditoria = AUDITORIAS.get(job_id)
+    if auditoria:
+        return auditoria["relatorio"]
+
+    if not armazenamento.carregar_resumo(job_id):
+        raise HTTPException(status_code=404, detail="Auditoria não encontrada.")
+    return armazenamento.carregar_relatorio(job_id)
+
+
 @app.get("/api/v1/auditorias/{job_id}/relatorio.csv", tags=["Auditoria"])
 def baixar_relatorio(job_id: str):
     """Baixa o relatório no mesmo formato gerado pelo script de linha de comando.
@@ -315,5 +333,23 @@ def baixar_relatorio(job_id: str):
     )
 
 
+class ArquivosSemCache(StaticFiles):
+    """Serve o front-end obrigando o navegador a revalidar.
+
+    O front é editado direto no disco, sem build e sem versionamento no nome dos
+    arquivos. Sem este cabeçalho o navegador reaproveita o `app.js` antigo depois
+    de uma alteração, e a mudança simplesmente não aparece — sem erro nenhum, o que
+    torna a causa difícil de achar.
+
+    `no-cache` não desliga o cache: manda checar com o servidor antes de usar, então
+    o custo é uma requisição condicional, não o reenvio do arquivo.
+    """
+
+    async def get_response(self, path: str, scope):
+        resposta = await super().get_response(path, scope)
+        resposta.headers["Cache-Control"] = "no-cache"
+        return resposta
+
+
 # O front-end é servido pelo próprio FastAPI (sem build step / sem Node).
-app.mount("/", StaticFiles(directory=f"{engine.BASE_DIR}/static", html=True), name="static")
+app.mount("/", ArquivosSemCache(directory=f"{engine.BASE_DIR}/static", html=True), name="static")
