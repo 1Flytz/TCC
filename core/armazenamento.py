@@ -40,9 +40,16 @@ CREATE TABLE IF NOT EXISTS pagina (
     val_ocr       TEXT,
     status_valor  TEXT,
     status_geral  TEXT,
+    natureza      TEXT,
     PRIMARY KEY (job_id, pagina)
 );
 """
+
+# Colunas acrescentadas depois que já havia bancos em uso. `CREATE TABLE IF NOT
+# EXISTS` não altera tabela existente, então elas entram por ALTER TABLE.
+COLUNAS_ACRESCENTADAS = (
+    ("pagina", "natureza", "TEXT"),
+)
 
 # Ponte entre as colunas do relatório (nomes de exibição, usados no CSV e no JSON)
 # e as colunas da tabela. Manter os dois lados aqui evita espalhar strings soltas.
@@ -55,6 +62,7 @@ _COLUNAS = (
     ("Valor (OCR Boletos)", "val_ocr"),
     ("Status Valor", "status_valor"),
     ("Status Geral", "status_geral"),
+    ("Natureza", "natureza"),
 )
 
 
@@ -83,9 +91,19 @@ def _conexao():
 
 
 def criar_esquema() -> None:
+    """Cria o banco se não existir e aplica as colunas acrescentadas depois.
+
+    Bancos criados por versões anteriores continuam servindo: a coluna nova entra
+    vazia nas auditorias antigas, em vez de exigir apagar o histórico.
+    """
     with _conexao() as conexao:
         conexao.execute("PRAGMA journal_mode = WAL")
         conexao.executescript(ESQUEMA)
+
+        for tabela, coluna, tipo in COLUNAS_ACRESCENTADAS:
+            existentes = {linha["name"] for linha in conexao.execute(f"PRAGMA table_info({tabela})")}
+            if coluna not in existentes:
+                conexao.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
 
 
 def registrar_auditoria(job_id, criada_em, dpi, arquivo_boletos, arquivo_consulta) -> None:

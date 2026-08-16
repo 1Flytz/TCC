@@ -249,7 +249,7 @@ function adicionarLinha(evento, divergente) {
     <td class="${codigoDiverge ? "divergencia" : ""}">${linha["Codigo (OCR Boletos)"]}</td>
     <td>${linha["Valor (PDF Consulta)"]}</td>
     <td class="${valorDiverge ? "divergencia" : ""}">${linha["Valor (OCR Boletos)"]}</td>
-    <td>${selo(linha["Status Geral"])}</td>
+    <td>${selo(linha["Status Geral"])}${etiquetaNatureza(linha["Natureza"])}</td>
   `;
 
   tr.addEventListener("click", () => mostrarPagina(evento.pagina));
@@ -260,6 +260,20 @@ function selo(status) {
   const classe = status === "OK" ? "ok" : status === "ERRO" ? "erro" : "";
   const texto = status === "ERRO" ? "Divergente" : status === "OK" ? "Conforme" : status;
   return `<span class="selo ${classe}">${texto}</span>`;
+}
+
+// Natureza da divergência: o que o operador precisa fazer a respeito.
+const NATUREZAS = {
+  "OUTRO CADASTRO": ["Outro cadastro", "grave", "O código lido pertence a outra guia deste lote — pode ser guia trocada."],
+  "NAO LIDO": ["Não lido", "", "O OCR não extraiu o dado. Reescanear ou aumentar o DPI costuma resolver."],
+  "VERIFICAR": ["Verificar", "", "Leu algo que não corresponde ao esperado nem a outro cadastro do lote."],
+};
+
+function etiquetaNatureza(natureza) {
+  const info = NATUREZAS[natureza];
+  if (!info) return "";
+  const [texto, classe, explicacao] = info;
+  return `<span class="natureza ${classe}" title="${explicacao}">${texto}</span>`;
 }
 
 function mostrarPagina(numero) {
@@ -278,6 +292,17 @@ function mostrarPagina(numero) {
   $("cmp-val-esperado").textContent = linha["Valor (PDF Consulta)"];
   $("cmp-val-lido").textContent = linha["Valor (OCR Boletos)"];
   $("cmp-val-selo").outerHTML = selo(linha["Status Valor"]).replace('class="selo', 'id="cmp-val-selo" class="selo');
+
+  const explicacao = $("explicacao-natureza");
+  const infoNatureza = NATUREZAS[linha["Natureza"]];
+  if (infoNatureza) {
+    const [texto, classe, detalhe] = infoNatureza;
+    explicacao.className = `explicacao-natureza ${classe}`;
+    explicacao.innerHTML = `<strong>${texto}:</strong> ${detalhe}`;
+    explicacao.hidden = false;
+  } else {
+    explicacao.hidden = true;
+  }
 
   const etiqueta = $("etiqueta-estrategia");
   if (evento.estrategia) {

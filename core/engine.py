@@ -326,7 +326,49 @@ def gerar_imagem_anotada(img_gray, resultado, largura_max=1400):
 COLUNAS_RELATORIO = [
     "Pagina", "Codigo (PDF Consulta)", "Codigo (OCR Boletos)", "Status Codigo",
     "Valor (PDF Consulta)", "Valor (OCR Boletos)", "Status Valor", "Status Geral",
+    "Natureza",
 ]
+
+# Naturezas possíveis de uma divergência, da mais grave para a mais trivial.
+NATUREZA_OUTRO_CADASTRO = "OUTRO CADASTRO"
+NATUREZA_NAO_LIDO = "NAO LIDO"
+NATUREZA_VERIFICAR = "VERIFICAR"
+
+# Valores com que o consenso sinaliza "não consegui ler nada".
+_LEITURA_VAZIA_CODIGO = {"", "0", None}
+_LEITURA_VAZIA_VALOR = {"", "0,00", None}
+
+
+def classificar_divergencia(resultado, cadastros_conhecidos):
+    """Diz de que tipo é a divergência, para o operador saber o que fazer com ela.
+
+    Todas entram no relatório como divergentes, mas pedem reações diferentes:
+
+    - `OUTRO CADASTRO`: o código lido pertence a outra guia do próprio lote. É o
+      único caso com risco financeiro direto — pode ser guia trocada — e o que
+      merece conferência humana imediata.
+    - `NAO LIDO`: o OCR não extraiu nada. Costuma ser qualidade de digitalização
+      ou resolução baixa demais; reescanear ou subir o DPI resolve.
+    - `VERIFICAR`: leu algo que não corresponde ao esperado nem a nenhum cadastro
+      do lote. Pode ser sujeira no scan ou divergência real — só o olho decide.
+
+    Não há como distinguir, no caso geral, erro de leitura de divergência
+    verdadeira: a classificação é um indício de prioridade, não um veredito.
+    """
+    if resultado["status_geral"] != "ERRO":
+        return ""
+
+    if resultado["status_codigo"] != "OK":
+        codigo = resultado["codigo"]
+        if codigo in _LEITURA_VAZIA_CODIGO:
+            return NATUREZA_NAO_LIDO
+        if codigo in cadastros_conhecidos:
+            return NATUREZA_OUTRO_CADASTRO
+        return NATUREZA_VERIFICAR
+
+    if resultado["valor"] in _LEITURA_VAZIA_VALOR:
+        return NATUREZA_NAO_LIDO
+    return NATUREZA_VERIFICAR
 
 
 def _poppler_kwargs():
@@ -342,6 +384,8 @@ def realizar_auditoria_stream(caminho_boletos, caminho_consulta, dpi=DPI_PADRAO,
     tamanho do lote.
     """
     lista_mestre = extrair_lista_mestre(caminho_consulta)
+    # Usado para reconhecer quando o OCR leu o número de OUTRA guia do lote.
+    cadastros_conhecidos = {item["codigo"] for item in lista_mestre if item["codigo"] != "N/A"}
 
     info = pdf2image.pdfinfo_from_path(caminho_boletos, **_poppler_kwargs())
     total_paginas = info["Pages"]
@@ -367,8 +411,10 @@ def realizar_auditoria_stream(caminho_boletos, caminho_consulta, dpi=DPI_PADRAO,
         img_gray = paginas[0].convert('L')
         resultado = processar_pagina_com_consenso(img_gray, item_esperado["codigo"], item_esperado["valor"])
 
+        natureza = classificar_divergencia(resultado, cadastros_conhecidos)
+
         if resultado["status_geral"] == "ERRO":
-            print(f"   [DIFERENÇA] Pag {numero} | Esp: {item_esperado['codigo']} - {item_esperado['valor']} | Lido: {resultado['codigo']} - {resultado['valor']}")
+            print(f"   [DIFERENÇA/{natureza}] Pag {numero} | Esp: {item_esperado['codigo']} - {item_esperado['valor']} | Lido: {resultado['codigo']} - {resultado['valor']}")
 
         linha = {
             "Pagina": numero,
@@ -379,6 +425,7 @@ def realizar_auditoria_stream(caminho_boletos, caminho_consulta, dpi=DPI_PADRAO,
             "Valor (OCR Boletos)": resultado["valor"],
             "Status Valor": resultado["status_valor"],
             "Status Geral": resultado["status_geral"],
+            "Natureza": natureza,
         }
 
         evento = {"tipo": "pagina", "pagina": numero, "total_paginas": total_paginas, "linha": linha}

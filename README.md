@@ -23,6 +23,23 @@ imagem de cada guia destacando exatamente de onde o código e o valor foram lido
    (`113640`/`113840`, `119000`/`119090`). Tolerá-las faria uma divergência real ser
    reportada como conforme, em silêncio.
 
+## 🚦 Natureza da divergência
+
+Nem toda divergência pede a mesma reação, então cada uma é classificada:
+
+| Natureza | O que significa | O que fazer |
+|---|---|---|
+| **Outro cadastro** | O código lido pertence a **outra guia do mesmo lote** | Conferir imediatamente — pode ser guia trocada |
+| **Não lido** | O OCR não extraiu o dado | Reescanear ou aumentar o DPI |
+| **Verificar** | Leu algo que não corresponde ao esperado nem a outro cadastro | Olhar a imagem: sujeira no scan ou divergência real |
+
+A primeira é a única com risco financeiro direto, e sem essa separação ela ficava
+escondida no meio das demais. Exemplo real do lote de referência, em DPI 300: na guia
+do cadastro `115870` o OCR leu `118870` — que é um contribuinte real do mesmo lote.
+
+A classificação é indício de prioridade, não veredito: no caso geral não há como
+distinguir erro de leitura de divergência verdadeira sem olhar a guia.
+
 ## 📋 Pré-requisitos
 
 - **Python 3.10+** — [download](https://www.python.org/downloads/)

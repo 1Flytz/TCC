@@ -5,7 +5,7 @@ import pytest
 from core import armazenamento, engine
 
 
-def _linha(pagina, status_geral="OK", codigo="113640", valor="76,82"):
+def _linha(pagina, status_geral="OK", codigo="113640", valor="76,82", natureza=""):
     """Monta uma linha no mesmo formato que o motor entrega."""
     return {
         "Pagina": pagina,
@@ -16,6 +16,7 @@ def _linha(pagina, status_geral="OK", codigo="113640", valor="76,82"):
         "Valor (OCR Boletos)": valor,
         "Status Valor": "OK",
         "Status Geral": status_geral,
+        "Natureza": natureza,
     }
 
 
