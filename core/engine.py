@@ -9,9 +9,11 @@ O motor é agnóstico de interface: tanto o CLI (`conferidor.py`) quanto a API
 """
 
 import base64
+import glob
 import io
 import os
 import re
+import shutil
 from collections import Counter
 
 import pdf2image
@@ -26,31 +28,82 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CAMINHO_PDF_BOLETOS = os.path.join(BASE_DIR, 'docs', 'boletos.pdf')
 CAMINHO_PDF_CONSULTA = os.path.join(BASE_DIR, 'docs', 'consulta.pdf')
 
-# Podem ser sobrescritos por variável de ambiente (útil porque cada membro do grupo
-# instala o Tesseract/Poppler em um caminho diferente) ou por `configure_paths`.
-CAMINHO_TESSERACT = os.environ.get('TESSERACT_CMD', r'C:\Program Files\Tesseract-OCR\tesseract.exe')
-POPPLER_PATH = os.environ.get('POPPLER_PATH', r"C:\Program Files\poppler\Library\bin")
-
 DPI_PADRAO = 500
 CONFIG_TESSERACT = r'--psm 6 -c tessedit_char_whitelist=0123456789,. -c classify_bln_numeric_mode=1 -c tessedit_char_blacklist=IlOo'
+
+# Lugares onde o Tesseract e o Poppler costumam parar, conforme a forma de instalação.
+# O `*` cobre a pasta do winget, cujo nome muda a cada versão do pacote.
+_PALPITES_TESSERACT = (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    os.path.expandvars(r"%LOCALAPPDATA%\Programs\Tesseract-OCR\tesseract.exe"),
+    os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\*Tesseract*\tesseract.exe"),
+)
+_PALPITES_POPPLER = (
+    r"C:\Program Files\poppler\Library\bin",
+    r"C:\Program Files\poppler\bin",
+    r"C:\poppler\Library\bin",
+    os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\*Poppler*\*\Library\bin"),
+    os.path.expandvars(r"%LOCALAPPDATA%\Programs\poppler\Library\bin"),
+)
+
+
+def _procurar(palpites, executavel, e_pasta):
+    """Encontra um programa externo sem depender de pasta fixa.
+
+    Procura, nesta ordem: no PATH do sistema, e depois nos lugares onde os
+    instaladores costumam colocar os arquivos. Assim a aplicação funciona tanto com
+    instalação padrão quanto via winget ou ZIP extraído em qualquer diretório.
+    """
+    achado = shutil.which(executavel)
+    if achado:
+        return os.path.dirname(achado) if e_pasta else achado
+
+    for palpite in palpites:
+        for caminho in sorted(glob.glob(palpite), reverse=True):  # versão mais nova antes
+            if (os.path.isdir if e_pasta else os.path.isfile)(caminho):
+                return caminho
+    return ""
+
+
+def descobrir_tesseract() -> str:
+    return os.environ.get("TESSERACT_CMD") or _procurar(_PALPITES_TESSERACT, "tesseract", e_pasta=False)
+
+
+def descobrir_poppler() -> str:
+    return os.environ.get("POPPLER_PATH") or _procurar(_PALPITES_POPPLER, "pdftoppm", e_pasta=True)
+
+
+CAMINHO_TESSERACT = descobrir_tesseract()
+POPPLER_PATH = descobrir_poppler()
 
 
 def configure_paths(tess_path: str, poppler_bin: str):
     """Define onde estão o Tesseract e o Poppler.
 
-    Se o caminho informado não existir, recorre ao executável disponível no PATH —
-    assim o projeto roda sem edição de código em máquinas onde a instalação ficou
-    em outro diretório (ex.: instalação via winget).
+    Caminho inexistente é ignorado em favor da busca automática, de modo que o
+    projeto rode sem edição de código em qualquer máquina.
     """
     global CAMINHO_TESSERACT, POPPLER_PATH
-    CAMINHO_TESSERACT = tess_path
-    POPPLER_PATH = poppler_bin
-    pytesseract.pytesseract.tesseract_cmd = tess_path if os.path.isfile(tess_path) else 'tesseract'
-    if POPPLER_PATH and os.path.isdir(POPPLER_PATH) and POPPLER_PATH not in os.environ.get("PATH", ""):
+    CAMINHO_TESSERACT = tess_path if (tess_path and os.path.isfile(tess_path)) else descobrir_tesseract()
+    POPPLER_PATH = poppler_bin if (poppler_bin and os.path.isdir(poppler_bin)) else descobrir_poppler()
+
+    pytesseract.pytesseract.tesseract_cmd = CAMINHO_TESSERACT or "tesseract"
+    if POPPLER_PATH and POPPLER_PATH not in os.environ.get("PATH", ""):
         os.environ["PATH"] += os.pathsep + POPPLER_PATH
 
 
-# Aplica os caminhos padrão já na importação, para que a API funcione sem setup extra.
+def diagnosticar() -> dict:
+    """Situação das dependências externas, para o script de instalação conferir."""
+    return {
+        "tesseract": CAMINHO_TESSERACT,
+        "tesseract_ok": bool(CAMINHO_TESSERACT and os.path.isfile(CAMINHO_TESSERACT)),
+        "poppler": POPPLER_PATH,
+        "poppler_ok": bool(POPPLER_PATH and os.path.isdir(POPPLER_PATH)),
+    }
+
+
+# Aplica os caminhos descobertos já na importação, para que a API funcione sem setup extra.
 configure_paths(CAMINHO_TESSERACT, POPPLER_PATH)
 
 

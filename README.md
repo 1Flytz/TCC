@@ -50,7 +50,31 @@ distinguir erro de leitura de divergência verdadeira sem olhar a guia.
 Tesseract e Poppler são programas externos, não pacotes Python: precisam ser instalados à
 parte. No Windows, o Poppler é um ZIP — basta extrair e guardar o caminho da pasta `bin`.
 
-## 🚀 Instalação
+## ⚡ Instalação rápida (Windows)
+
+Para levar o projeto a outra máquina, há dois arquivos que dispensam qualquer comando:
+
+| Arquivo | O que faz |
+|---|---|
+| `instalar.bat` | Instala Python, Tesseract, Poppler e as bibliotecas, e confere se ficou tudo no lugar |
+| `iniciar.bat` | Sobe a aplicação e abre o navegador |
+
+Basta dar dois cliques em `instalar.bat`, aguardar, e depois em `iniciar.bat`. É preciso
+internet durante a instalação.
+
+**Os programas podem ser instalados em qualquer pasta.** A aplicação procura o Tesseract e
+o Poppler no `PATH` e nos diretórios usuais — incluindo o do winget, cujo nome muda a cada
+versão —, então não existe caminho fixo a respeitar.
+
+Se o `instalar.bat` pedir para ser executado uma segunda vez, é normal: o Windows só
+reconhece um programa recém-instalado em janelas abertas depois da instalação.
+
+> **Atenção ao levar para outro computador:** os PDFs de entrada não são versionados (veja
+> a seção sobre os documentos). Copie a pasta do projeto inteira, com o conteúdo de `docs/`,
+> em vez de clonar do repositório — mas **sem** a pasta `.venv`, que não funciona fora da
+> máquina onde foi criada.
+
+## 🚀 Instalação manual
 
 ```bash
 git clone https://github.com/1Flytz/TCC.git
