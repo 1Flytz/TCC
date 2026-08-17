@@ -96,6 +96,17 @@ REM ---------------------------------------------------------
 REM 5. Ambiente virtual + bibliotecas Python
 REM ---------------------------------------------------------
 echo [5/6] Preparando o ambiente Python...
+
+REM Um .venv copiado de outro computador aponta para um Python que nao existe
+REM aqui. Testar e mais confiavel do que so verificar se a pasta esta presente.
+if exist ".venv\Scripts\python.exe" (
+    ".venv\Scripts\python.exe" --version >nul 2>&1
+    if errorlevel 1 (
+        echo   O ambiente virtual veio de outro computador. Refazendo...
+        rmdir /s /q ".venv"
+    )
+)
+
 if not exist ".venv\Scripts\python.exe" (
     echo   Criando o ambiente virtual...
     %PY% -m venv .venv
