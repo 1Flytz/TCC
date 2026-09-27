@@ -22,6 +22,8 @@ import threading
 import time
 import uuid
 from datetime import datetime
+from fastapi.middleware.cors import CORSMiddleware
+import traceback
 
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -38,6 +40,14 @@ app = FastAPI(
         "Automatiza a conferência de guias (RLC / fichas financeiras): compara o código "
         "e o valor lidos por OCR nos boletos com os dados do PDF de consulta."
     ),
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 armazenamento.criar_esquema()
@@ -151,27 +161,42 @@ def _executar_auditoria(job_id: str, caminho_boletos: str, caminho_consulta: str
                     auditoria["conformes"] += 1
                 elif evento["linha"]["Status Geral"] == "ERRO":
                     auditoria["divergentes"] += 1
-                # Grava guia a guia: se a auditoria for interrompida, o que já foi
-                # conferido continua registrado.
+                
                 _persistir(armazenamento.salvar_pagina, job_id, evento["linha"])
             elif evento["tipo"] == "inicio":
                 auditoria["total_paginas"] = evento["total_paginas"]
                 _persistir(armazenamento.atualizar_status, job_id, "processando", evento["total_paginas"])
+            elif evento["tipo"] == "fim":
+                # Adicionado para suportar o novo ranking antes de fechar a fila
+                auditoria["status"] = "concluida"
+                _publicar_encerramento(fila, evento)
+                break # Sai do loop pois o evento já foi publicado
 
             try:
-                fila.put(evento, timeout=SEGUNDOS_SEM_CONSUMO)
+                # Publica eventos de página e início normalmente
+                if evento["tipo"] != "fim":
+                    fila.put(evento, timeout=SEGUNDOS_SEM_CONSUMO)
             except queue.Full:
-                # Um navegador conectado esvazia a fila em milissegundos; se ela ficou
-                # cheia todo esse tempo, a aba foi fechada. Interrompe a auditoria em vez
-                # de seguir acumulando dezenas de MB de imagens que ninguém vai ver.
                 auditoria["status"] = "abandonada"
                 _esvaziar_fila(fila)
                 return
+        
+        # Garante que o status final seja concluída caso saia do loop
         auditoria["status"] = "concluida"
-    except Exception as e:  # noqa: BLE001 - o erro precisa chegar ao front-end
+        auditoria["status"] = "concluida"
+    except Exception as e:
         auditoria["status"] = "erro"
+        print("Erro crítico capturado na execução:")
+        traceback.print_exc()
         _publicar_encerramento(fila, {"tipo": "erro", "mensagem": f"{type(e).__name__}: {e}"})
     finally:
+        _persistir(armazenamento.atualizar_status, job_id, auditoria["status"])
+        if auditoria["status"] != "concluida":
+            _publicar_encerramento(fila, _SENTINELA)
+        else:
+            # Envia a sentinela no final se já não foi enviada
+             _publicar_encerramento(fila, _SENTINELA)
+        shutil.rmtree(pasta_temp, ignore_errors=True)
         # `auditoria["status"]` já reflete o desfecho: concluida, erro ou abandonada.
         _persistir(armazenamento.atualizar_status, job_id, auditoria["status"])
         _publicar_encerramento(fila, _SENTINELA)

@@ -338,3 +338,25 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   color: #8d2020;
   border-left-color: var(--erro);
 }
+
+#container-modelo {
+  background: linear-gradient(120deg, #1e3a8a, #2563eb);
+  color: white;
+  text-align: center;
+  padding: 15px;
+  border-radius: var(--raio);
+  margin-bottom: 20px;
+  box-shadow: var(--sombra);
+}
+
+#container-modelo h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+#nome-modelo {
+  font-weight: 900;
+  text-transform: uppercase;
+  color: #ffeb3b;
+}

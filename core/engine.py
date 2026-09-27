@@ -12,6 +12,7 @@ import base64
 import io
 import os
 import re
+import time
 from collections import Counter
 
 import pdf2image
@@ -28,8 +29,8 @@ CAMINHO_PDF_CONSULTA = os.path.join(BASE_DIR, 'docs', 'consulta.pdf')
 
 # Podem ser sobrescritos por variável de ambiente (útil porque cada membro do grupo
 # instala o Tesseract/Poppler em um caminho diferente) ou por `configure_paths`.
-CAMINHO_TESSERACT = os.environ.get('TESSERACT_CMD', r'C:\Program Files\Tesseract-OCR\tesseract.exe')
-POPPLER_PATH = os.environ.get('POPPLER_PATH', r"C:\Program Files\poppler\Library\bin")
+CAMINHO_TESSERACT = os.environ.get('TESSERACT_CMD', r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+POPPLER_PATH = os.environ.get('POPPLER_PATH', r"C:\poppler\Library\bin")
 
 DPI_PADRAO = 500
 CONFIG_TESSERACT = r'--psm 6 -c tessedit_char_whitelist=0123456789,. -c classify_bln_numeric_mode=1 -c tessedit_char_blacklist=IlOo'
@@ -377,14 +378,7 @@ def _poppler_kwargs():
 
 
 def realizar_auditoria_stream(caminho_boletos, caminho_consulta, dpi=DPI_PADRAO, com_imagem=True):
-    """Gera um evento por página conferida, permitindo acompanhamento em tempo real.
-
-    Converte o PDF página a página (em vez de carregar tudo de uma vez) para que o
-    primeiro resultado apareça em segundos e o uso de memória não cresça com o
-    tamanho do lote.
-    """
     lista_mestre = extrair_lista_mestre(caminho_consulta)
-    # Usado para reconhecer quando o OCR leu o número de OUTRA guia do lote.
     cadastros_conhecidos = {item["codigo"] for item in lista_mestre if item["codigo"] != "N/A"}
 
     info = pdf2image.pdfinfo_from_path(caminho_boletos, **_poppler_kwargs())
@@ -410,7 +404,6 @@ def realizar_auditoria_stream(caminho_boletos, caminho_consulta, dpi=DPI_PADRAO,
 
         img_gray = paginas[0].convert('L')
         resultado = processar_pagina_com_consenso(img_gray, item_esperado["codigo"], item_esperado["valor"])
-
         natureza = classificar_divergencia(resultado, cadastros_conhecidos)
 
         if resultado["status_geral"] == "ERRO":
@@ -442,4 +435,4 @@ def realizar_auditoria_stream(caminho_boletos, caminho_consulta, dpi=DPI_PADRAO,
 
         yield evento
 
-    yield {"tipo": "fim", "total_paginas": total_paginas}
+    yield {"tipo": "fim", "total_paginas": total_paginas, "modelo": "Tesseract OCR"}

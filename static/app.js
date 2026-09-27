@@ -21,12 +21,15 @@ const paginas = new Map();
 let contadores = { processadas: 0, conformes: 0, divergentes: 0, total: null };
 let fonteEventos = null;
 
+let timerInterval = null;
+let tempoDecorrido = 0;
+
 formulario.addEventListener("submit", async (evento) => {
   evento.preventDefault();
   aviso.textContent = "";
 
   const dados = new FormData(formulario);
-  const dpi = dados.get("dpi");
+  const dpi = dados.get("dpi") || 500;
   dados.delete("dpi");
 
   botaoIniciar.disabled = true;
@@ -49,6 +52,9 @@ formulario.addEventListener("submit", async (evento) => {
 });
 
 function reiniciarPainel() {
+  clearInterval(timerInterval);
+  tempoDecorrido = 0;
+  if ($("ind-tempo")) $("ind-tempo").textContent = "00:00";
   paginas.clear();
   corpoTabela.innerHTML = "";
   contadores = { processadas: 0, conformes: 0, divergentes: 0, total: null };
@@ -59,6 +65,7 @@ function reiniciarPainel() {
   $("etiqueta-estrategia").hidden = true;
   $("legenda-visor").hidden = true;
   $("link-csv").hidden = true;
+  
   painel.hidden = false;
   painel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -66,6 +73,13 @@ function reiniciarPainel() {
 function acompanhar(jobId) {
   situacao.textContent = "Convertendo o PDF e lendo a lista mestre…";
   botaoIniciar.textContent = "Auditoria em andamento…";
+
+  timerInterval = setInterval(() => {
+    tempoDecorrido++;
+    const m = String(Math.floor(tempoDecorrido / 60)).padStart(2, '0');
+    const s = String(tempoDecorrido % 60).padStart(2, '0');
+    if ($("ind-tempo")) $("ind-tempo").textContent = `${m}:${s}`;
+  }, 1000);
 
   fonteEventos = new EventSource(`/api/v1/auditorias/${jobId}/eventos`);
 
@@ -75,6 +89,7 @@ function acompanhar(jobId) {
     if (evento.tipo === "inicio") {
       contadores.total = evento.total_paginas;
       situacao.textContent = `${evento.total_paginas} guias encontradas · ${evento.total_consulta} lançamentos na consulta · ${evento.dpi} DPI`;
+      if ($("nome-modelo")) $("nome-modelo").textContent = `${evento.dpi} DPI`;
       atualizarIndicadores();
     } else if (evento.tipo === "pagina") {
       registrarPagina(evento);
@@ -97,7 +112,11 @@ function acompanhar(jobId) {
 }
 
 function encerrar(jobId, houveResultado) {
-  if (fonteEventos) { fonteEventos.close(); fonteEventos = null; }
+  clearInterval(timerInterval); 
+  if (fonteEventos) { 
+    fonteEventos.close(); 
+    fonteEventos = null; 
+  }
   botaoIniciar.disabled = false;
   botaoIniciar.textContent = "Iniciar nova auditoria";
   if (houveResultado) {

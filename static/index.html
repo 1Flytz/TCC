@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PyConfer — Conferência automatizada de guias</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="topo">
@@ -72,7 +72,15 @@
 
     <!-- ETAPA 2: acompanhamento -->
     <section class="painel" id="painel" hidden>
+      <div id="container-modelo">
+        <h2>Resolução Ativa: <span id="nome-modelo">Aguardando...</span></h2>
+      </div>
+
       <div class="indicadores">
+        <div class="indicador" style="border-left-color: #8b5cf6;">
+          <span class="indicador-valor" id="ind-tempo" style="color: #8b5cf6;">00:00</span>
+          <span class="indicador-rotulo">Tempo de Leitura</span>
+        </div>
         <div class="indicador">
           <span class="indicador-valor" id="ind-processadas">0</span>
           <span class="indicador-rotulo">Páginas conferidas</span>
@@ -160,6 +168,6 @@
     </section>
   </main>
 
-  <script src="/app.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

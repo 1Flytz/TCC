@@ -1,118 +1,98 @@
-# Contribuindo com o PyConfer
+# Contributing to PyConfer
 
-Este documento organiza a divisão de trabalho do grupo. O objetivo é que cada membro
-trabalhe na sua frente sem depender do andamento dos outros, usando o contrato de dados
-(o JSON da API) como ponto de integração.
+This guide describes the team's responsibilities, contribution workflow, and roadmap. The API's JSON contract connects the workstreams so each contributor can make progress without waiting for every other component.
 
-## 📍 Onde o projeto está
+## Current project stage
 
-A **primeira fase está concluída**: o motor de conferência, a API REST, a persistência do
-histórico e uma interface Web funcional. A aplicação confere um lote completo de guias,
-mostra o resultado em tempo real, destaca na imagem de onde cada dado foi lido, classifica
-as divergências e exporta o laudo. Há 80 testes automatizados cobrindo o motor, o ciclo de
-vida das auditorias e o banco.
+The first implementation phase provides a verification engine, a REST API, SQLite history, and a working web interface. The prototype processes batches, streams page results, highlights OCR evidence, classifies discrepancies, and exports reports. The current interface also shows active resolution and elapsed reading time. Automated tests cover engine rules, API behavior, and persistence.
 
-O que existe hoje é um protótipo **local e monousuário**. Foi decisão consciente: sem
-certeza de que a conferência está correta, distribuir o sistema para uma equipe apenas
-multiplicaria o erro.
+PyConfer currently runs locally for a single user. Authentication, user-specific access, shared database infrastructure, and recorded review decisions remain future work. Establishing reliable verification is a prerequisite for expanding the prototype to team use.
 
-## 🎯 A meta da próxima fase
+## Goal of the next phase
 
-**Tornar o PyConfer colaborativo.** É a maior lacuna entre o que o Capítulo 1 promete —
-uma plataforma para equipes — e o que a aplicação faz hoje.
+**Make PyConfer collaborative.** This addresses the gap between the team platform described in the thesis and the current local prototype.
 
-Essa meta foi escolhida porque exige as três frentes ao mesmo tempo: banco de dados
-compartilhado, autenticação na API e telas por usuário. Cada frente abaixo tem trabalho
-próprio e um ponto de partida que **não depende de ninguém**.
+This phase combines shared data storage, API authentication, and user-specific screens. The tasks below include starting points that can be pursued independently.
 
-## 👥 Divisão de responsabilidades
+## Team responsibilities
 
-### 1. Motor e API — Felipe
+### 1. Engine and API — Felipe
 
-Dono do `core/` e do `api/`, e do contrato de dados que as outras frentes consomem.
+Own `core/`, `api/`, and the data contract consumed by the other workstreams. Coordinate changes to storage integration with the database contributor.
 
-- Validação do **dígito verificador** da linha digitável
-- **Autenticação** na API (o front-end depende disso)
-- **Endpoints de métricas** (o painel depende disso)
-- Medição comparativa com a **conferência manual** — o número que falta para fechar o
-  objetivo geral do trabalho
+- Implement check-digit validation for the payment slip's numeric line.
+- Add API authentication to support front-end login and sessions.
+- Define metrics endpoints for the future dashboard.
+- Compare automated verification with manual checking to evaluate the thesis's overall objective.
 
-**Regra de ouro:** quando outra frente precisar de um dado novo, ela pede. Ninguém altera
-o motor ou a API por conta própria.
+When another workstream needs a new field or behavior, coordinate the contract with the engine/API owner before modifying these components.
 
-### 2. Banco de dados — [nome do colega]
+### 2. Database — contributor to be assigned
 
-Hoje o projeto usa SQLite, com duas tabelas, guardando apenas o histórico das conferências.
+The current database has two tables and stores audit history only.
 
-- Migrar para **PostgreSQL ou MySQL** — requisito para múltiplos usuários e o que o
-  Capítulo 2 originalmente previa
-- Modelar **usuários e permissões**: quem executou cada auditoria, quem enxerga o quê
-- **Persistir a lista mestre**, que hoje é lida do PDF a cada execução e descartada
-- Consultas de **métricas**: acurácia ao longo do tempo, por lote, por operador
-- Política de **retenção e backup** — são dados de contribuinte, e isso pesa na avaliação
+- Plan migration to PostgreSQL or MySQL for the proposed shared deployment, consistent with the database architecture discussed in Chapter 2.
+- Model users and permissions: who ran each audit and who may access its results.
+- Persist the reference list, which is currently extracted for each run and discarded.
+- Design queries for metrics by batch, operator, and time period. Distinguish agreement with the reference from measured OCR accuracy against reviewed data.
+- Define retention and backup policies for taxpayer information.
 
-**Comece por:** desenhar o modelo de dados novo e comparar com o atual (`core/armazenamento.py`).
-Não depende de ninguém.
+**Starting point:** design the proposed schema and compare it with [`core/armazenamento.py`](core/armazenamento.py).
 
-### 3. Front-end — [nome do colega]
+### 3. Front end — contributor to be assigned
 
-A interface atual é JavaScript puro, sem framework nem etapa de compilação. Foi construída
-como **base**, não como produto final.
+The current interface uses plain JavaScript, with no framework or build step. It provides a foundation for the next phase.
 
-- Tela de **login** e sessão
-- **Painel de métricas**: conformidade ao longo do tempo, lotes com mais divergência
-- Fluxo de **revisão**: marcar uma divergência como conferida, registrar observação — hoje
-  o operador confere e nada fica registrado
-- Decidir entre migrar para **React ou Vue** ou manter JavaScript puro — e **justificar a
-  escolha por escrito**, porque essa justificativa entra na monografia
+- Design login and session handling.
+- Build a metrics dashboard for conformity over time and batches with discrepancies.
+- Add a review workflow for recording decisions and comments; the current interface does not persist the operator's review.
+- Evaluate React, Vue, or continued use of plain JavaScript. Record the rationale for the thesis rather than treating a framework migration as a requirement.
 
-**Comece por:** desenhar as telas novas e listar de quais dados cada uma precisa. Os
-endpoints vêm depois; o desenho não espera.
+**Starting point:** sketch the new screens and list the data each needs. Agree on the required API contract before implementing dependent integrations.
 
-### 4. Documentação — [nome do colega]
+### 4. Documentation — contributor to be assigned
 
-- As **sete figuras** marcadas em amarelo no documento: quatro diagramas (casos de uso,
-  sequência, classes, arquitetura) e três capturas de tela
-- **Conferir as catorze referências**, uma a uma, abrindo cada link
-- Limpeza no Word: atualizar o sumário, aplicar legendas de verdade na Tabela 1 e no
-  Quadro 1, corrigir o título órfão da seção 1.3
-- Escrever as seções técnicas **do trabalho das outras frentes**, conforme cada parte fica
-  pronta
-- Manter o Capítulo 3 em dia
+Maintain the repository guides and coordinate the thesis's technical writing. The existing thesis work plan includes:
 
-**Comece por:** conferir a bibliografia. Se alguma referência não se confirmar, o texto
-muda — melhor descobrir antes de diagramar.
+- Complete the seven figures marked in the working document: four diagrams (use cases, sequence, classes, and architecture) and three screenshots.
+- Verify the fourteen bibliography entries by opening and checking each source.
+- Update the Word table of contents, apply proper captions to Table 1 and the item labeled Quadro 1, and fix the orphaned heading in section 1.3.
+- Document the other workstreams as their implementations become available.
+- Keep Chapter 3 aligned with the implemented system.
 
-## 🔒 Duas regras para não quebrar o que funciona
+These items refer to the team's separate working thesis document, not files included with the repository. Reconfirm their status against that document.
 
-Três pessoas mexendo num sistema que já roda é risco real. Duas práticas resolvem:
+**Starting point:** verify the bibliography before final layout work, since unverifiable references may require changes to the text.
 
-**1. Cada frente na sua branch, integrada por pull request.** Ninguém envia direto para a
-`main`.
+## Development workflow
 
-**2. Os testes têm que passar antes de qualquer merge:**
+1. Follow the setup instructions in [README.md](README.md) and create your own virtual environment.
+2. Create a branch for a focused change and coordinate ownership where needed.
+3. Preserve existing route names, JSON fields, and report labels unless a contract change has been agreed with its consumers.
+4. Run `python -m pytest` before submitting the change. Leave `PYCONFER_DB` unset so the tests use their temporary database.
+5. Open a pull request describing the problem, resulting behavior, and validation.
+6. Review and merge through a pull request rather than pushing directly to `main`.
 
-```bash
-python -m pytest
-```
+Tests must pass before merging. For OCR or interface changes, also describe any manual validation performed with local inputs. Passing unit tests alone does not demonstrate recognition accuracy or correct browser behavior.
 
-Se quebrou, não entra. A suíte roda em cerca de dois segundos e já pegou erro real de
-lógica neste projeto — não é formalidade.
+## Interface principle
 
-## 🖼️ O princípio da interface
+> The reviewer must be able to see where the system obtained each field, not only the final result.
 
-Uma decisão de projeto que orienta tudo na camada visual e **não deve ser abandonada**:
+The annotated image makes it possible to inspect a discrepancy without reopening the original document. Preserve that connection between evidence and result when designing new screens. Where reliable coordinates are unavailable, communicate that limitation instead of implying that a field was visually located.
 
-> O auditor precisa enxergar **de onde** o sistema tirou cada informação, não apenas qual
-> foi o resultado.
+Historical reports currently contain no annotated images. Features requiring later access to those images need an explicit storage and retention design.
 
-É por isso que a tela mostra a imagem da própria guia com retângulos marcando as regiões
-lidas. Diante de uma divergência, o operador confirma em segundos sem reabrir o documento
-original. Qualquer tela nova deve orbitar esse princípio, não competir com ele.
+## Documentation conventions
 
-## 💻 Ambiente de execução
+- Write repository documentation in English.
+- Keep literal commands, paths, API fields, status values, and interface labels consistent with the implementation, including existing Portuguese identifiers.
+- Separate implemented features from planned work.
+- Update setup instructions and API documentation when behavior changes.
+- State the dataset, resolution, method, and limitations behind accuracy or timing claims. The browser timer alone is not a controlled OCR benchmark.
 
-O projeto roda **localmente**, sem deploy. Cada membro clona o repositório e segue o setup
-do `README.md`. Os documentos contêm dados sigilosos de contribuintes e, por isso, não são
-versionados nem enviados a serviços externos — restrição que vale também para a fase
-colaborativa, quando o banco passar a rodar em servidor próprio.
+## Local execution and data handling
+
+Each contributor clones the project and runs it locally. Working PDFs contain confidential taxpayer information and are excluded from version control. Do not commit them or send them to external services. Use synthetic data for public examples, screenshots, and tests.
+
+The planned collaborative phase should preserve this data-handling constraint using infrastructure controlled by the team. Authentication, permissions, and retention must be designed before extending access beyond the local prototype.
