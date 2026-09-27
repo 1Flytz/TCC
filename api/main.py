@@ -183,20 +183,12 @@ def _executar_auditoria(job_id: str, caminho_boletos: str, caminho_consulta: str
         
         # Garante que o status final seja concluída caso saia do loop
         auditoria["status"] = "concluida"
-        auditoria["status"] = "concluida"
     except Exception as e:
         auditoria["status"] = "erro"
         print("Erro crítico capturado na execução:")
         traceback.print_exc()
         _publicar_encerramento(fila, {"tipo": "erro", "mensagem": f"{type(e).__name__}: {e}"})
     finally:
-        _persistir(armazenamento.atualizar_status, job_id, auditoria["status"])
-        if auditoria["status"] != "concluida":
-            _publicar_encerramento(fila, _SENTINELA)
-        else:
-            # Envia a sentinela no final se já não foi enviada
-             _publicar_encerramento(fila, _SENTINELA)
-        shutil.rmtree(pasta_temp, ignore_errors=True)
         # `auditoria["status"]` já reflete o desfecho: concluida, erro ou abandonada.
         _persistir(armazenamento.atualizar_status, job_id, auditoria["status"])
         _publicar_encerramento(fila, _SENTINELA)
