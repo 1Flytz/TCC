@@ -1,56 +1,54 @@
-# PyConfer — Conferência automatizada de guias
+# PyConfer
 
-Projeto de TCC. Automatiza a conferência de guias financeiras (RLC / fichas): compara o
-**código de cadastro** e o **valor** lidos por OCR nas guias digitalizadas com os dados do
-PDF de consulta, e aponta as divergências.
+**OCR-assisted verification of financial payment slips.**
 
-O que antes era conferência manual, folha a folha, vira um relatório por lote — com a
-imagem de cada guia destacando exatamente de onde o código e o valor foram lidos.
+PyConfer is an undergraduate final-year project (TCC) that compares registration codes and amounts from scanned payment slips (RLC / financial forms) against a reference PDF. It turns a page-by-page manual check into a batch report, with visual evidence showing where each field was read.
 
-## 🧠 Como funciona
+The current application is a **local, single-user prototype** built with Python, FastAPI, SQLite, and plain JavaScript. Repository documentation is in English; the application interface, API fields, and report labels remain in Portuguese.
 
-1. **Lista mestre** — o PDF de consulta é lido como texto (`pypdf`), extraindo os pares
-   código/valor esperados.
-2. **OCR das guias** — cada página do PDF de boletos vira imagem (`pdf2image` + Poppler) e
-   passa pelo Tesseract.
-3. **Consenso** — se a primeira leitura não bate com o esperado, a página é reprocessada
-   com **8 estratégias diferentes** de tratamento de imagem (limiares, nitidez, contraste,
-   zoom, engrossamento de traço) e o resultado sai por **votação por maioria**. Isso reduz
-   o erro aleatório de leitura sem cair no viés de confirmar o esperado a qualquer custo.
-4. **Comparação** — código e valor são conferidos contra a lista mestre. A comparação de
-   código é **exata**: não há tolerância a confusões de OCR, porque no lote de referência
-   existem 50 pares de cadastros distintos separados por exatamente essas trocas
-   (`113640`/`113840`, `119000`/`119090`). Tolerá-las faria uma divergência real ser
-   reportada como conforme, em silêncio.
+## Features
 
-## 🚦 Natureza da divergência
+- Upload a scanned payment-slip PDF and a reference PDF through the web interface.
+- Follow results page by page through Server-Sent Events (SSE).
+- Inspect annotated previews highlighting the registration code and amount.
+- Compare expected and extracted values, filter discrepancies, and inspect their categories.
+- Choose 200, 300, or 500 DPI and see the active resolution during processing.
+- Track elapsed time with the browser's **Tempo de Leitura** counter.
+- Reopen previous audit reports stored in SQLite and download CSV results.
+- Run the same verification engine from the command line.
 
-Nem toda divergência pede a mesma reação, então cada uma é classificada:
+The timer starts when the browser begins following an audit and stops when the interface closes that session. It is not an isolated OCR benchmark and is not saved in the audit history.
 
-| Natureza | O que significa | O que fazer |
+## How verification works
+
+1. **Read the reference list.** `pypdf` extracts text from the reference PDF and identifies registration codes and amounts.
+2. **Render each scanned page.** `pdf2image` and Poppler convert payment slips into images one page at a time.
+3. **Extract the fields.** Tesseract reads a preprocessed image. If the initial code and amount match the expected values, that reading is used immediately.
+4. **Build a consensus when needed.** If the initial reading does not match, the engine runs the remaining seven strategies: a different threshold, sharpening, the original image, 2x zoom, a higher threshold, contrast adjustment, and stroke thickening. The most frequent nonempty code and amount are selected independently. This is a frequency vote, not a calibrated confidence score.
+5. **Compare and explain.** The engine compares the relevant code suffix exactly, compares normalized amounts, and classifies discrepancies. OCR coordinates are mapped back to the original page for the annotated preview.
+
+Code comparison deliberately does not tolerate substitutions such as `6`/`8` or `0`/`9`: different registrations may differ by precisely those digits. A mismatch is presented for human review instead of being silently accepted.
+
+## Discrepancy categories
+
+| Report value | Meaning | Suggested review |
 |---|---|---|
-| **Outro cadastro** | O código lido pertence a **outra guia do mesmo lote** | Conferir imediatamente — pode ser guia trocada |
-| **Não lido** | O OCR não extraiu o dado | Reescanear ou aumentar o DPI |
-| **Verificar** | Leu algo que não corresponde ao esperado nem a outro cadastro | Olhar a imagem: sujeira no scan ou divergência real |
+| `OUTRO CADASTRO` | The extracted code belongs to another registration in the reference list. | Check whether the wrong slip was included or OCR misread the code. |
+| `NAO LIDO` | The required field was not extracted. | Inspect scan quality and consider rescanning or increasing DPI. |
+| `VERIFICAR` | A field differs without meeting the categories above. | Compare the highlighted reading with the original slip. |
 
-A primeira é a única com risco financeiro direto, e sem essa separação ela ficava
-escondida no meio das demais. Exemplo real do lote de referência, em DPI 300: na guia
-do cadastro `115870` o OCR leu `118870` — que é um contribuinte real do mesmo lote.
+These categories help prioritize review; they do not prove whether a discrepancy comes from the document or the OCR. Overall report statuses are `OK`, `ERRO` (mismatch), and `FIM DA LISTA` (no usable expected registration for that position).
 
-A classificação é indício de prioridade, não veredito: no caso geral não há como
-distinguir erro de leitura de divergência verdadeira sem olhar a guia.
+## Requirements
 
-## 📋 Pré-requisitos
+- **Python 3.10 or later**; compatibility also depends on the pinned packages in [requirements.txt](requirements.txt).
+- **Git** to clone the repository.
+- **Tesseract OCR**, including its English language data (`eng`).
+- **Poppler**, including its PDF information and rendering utilities.
 
-- **Python 3.10+** — [download](https://www.python.org/downloads/)
-- **Git** — [download](https://git-scm.com/)
-- **Tesseract-OCR** — [download](https://github.com/UB-Mannheim/tesseract/wiki)
-- **Poppler** — [download](https://github.com/oschwartz10612/poppler-windows/releases/)
+Tesseract and Poppler are external programs, not Python packages. Install them separately. Windows installation resources: [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki) and [Poppler binaries](https://github.com/oschwartz10612/poppler-windows/releases/).
 
-Tesseract e Poppler são programas externos, não pacotes Python: precisam ser instalados à
-parte. No Windows, o Poppler é um ZIP — basta extrair e guardar o caminho da pasta `bin`.
-
-## 🚀 Instalação
+## Installation
 
 ```bash
 git clone https://github.com/1Flytz/TCC.git
@@ -58,141 +56,145 @@ cd TCC
 python -m venv .venv
 ```
 
-Ative o ambiente virtual:
+Activate the environment using the command for your shell:
 
-| Sistema | Comando |
+| Shell | Command |
 |---|---|
-| Windows (PowerShell) | `.\.venv\Scripts\Activate.ps1` |
-| Windows (CMD) | `.venv\Scripts\activate.bat` |
+| Windows PowerShell | `.\.venv\Scripts\Activate.ps1` |
+| Windows Command Prompt | `.venv\Scripts\activate.bat` |
 | macOS / Linux | `source .venv/bin/activate` |
 
-E instale as dependências:
-
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-## ⚙️ Configuração do Tesseract e do Poppler
+Create the virtual environment on your own machine; environments copied from another computer may contain paths to an unavailable Python installation.
 
-Por padrão o projeto procura em `C:\Program Files\Tesseract-OCR\tesseract.exe` e
-`C:\Program Files\poppler\Library\bin`. **Se você instalou em outro lugar, não precisa
-editar código** — defina as variáveis de ambiente:
+## Configuration
 
-```bash
-$env:TESSERACT_CMD = "C:\caminho\para\tesseract.exe"
-$env:POPPLER_PATH  = "C:\caminho\para\poppler\Library\bin"
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `TESSERACT_CMD` | `C:\Program Files\Tesseract-OCR\tesseract.exe` | Tesseract executable. |
+| `POPPLER_PATH` | `C:\poppler\Library\bin` | Directory containing Poppler utilities. |
+| `PYCONFER_DB` | `pyconfer.db` in the project root | SQLite audit-history file. |
+
+For custom Windows locations, set these before starting the application:
+
+```powershell
+$env:TESSERACT_CMD = "C:\tools\Tesseract-OCR\tesseract.exe"
+$env:POPPLER_PATH = "C:\tools\poppler\Library\bin"
+$env:PYCONFER_DB = "C:\data\pyconfer.db"
 ```
 
-Se o caminho configurado não existir, o projeto ainda tenta o `tesseract` disponível no
-`PATH` do sistema. Pela linha de comando também dá para passar direto, com `--tesseract` e
-`--poppler`.
+Ensure the database's parent directory exists. If the configured Tesseract file or Poppler directory does not exist, the engine falls back to utilities on the system `PATH`. On macOS and Linux, utilities installed on `PATH` are used through this fallback; use your shell's `export` syntax for custom environment variables. The application reads environment variables directly; it does not load `.env` files.
 
-## 💻 Como usar
-
-### Aplicação web (recomendado)
+## Using the web application
 
 ```bash
 python -m uvicorn api.main:app --reload
 ```
 
-Abra **http://localhost:8000**. A tela permite enviar os dois PDFs, escolher a resolução e
-acompanhar a conferência **página a página, em tempo real**, com o trecho lido destacado na
-imagem da guia. Ao final, o relatório sai em CSV.
+Open [localhost:8000](http://localhost:8000), select both PDFs, choose a resolution, and click **Iniciar auditoria**. The results panel displays progress, active DPI, elapsed time, and matching and mismatching page counts. Select a result to inspect the expected values and annotated image. Download the CSV when processing ends.
 
-### Linha de comando
+The default is **500 DPI**. Lower resolutions are available for faster runs, but may make similar digits harder to distinguish. The appropriate setting depends on scan quality; 500 DPI is not a guarantee of error-free recognition.
 
-Para rodar um lote sem interface:
+Keep the audit page open while processing. The live stream uses a bounded queue; if it stays full for 60 seconds without consumption, the worker marks the audit as abandoned. Previously saved rows remain in the history.
+
+## Using the command line
 
 ```bash
 python conferidor.py --boletos docs/boletos.pdf --consulta docs/consulta.pdf
 ```
 
-| Opção | Para que serve |
-|---|---|
-| `--boletos` | PDF com as guias digitalizadas |
-| `--consulta` | PDF de consulta (lista mestre) |
-| `--saida` | Caminho do CSV de saída |
-| `--dpi` | Resolução da conversão (padrão: 500) |
-| `--tesseract` | Executável do Tesseract |
-| `--poppler` | Pasta `bin` do Poppler |
-
-### Sobre a resolução (DPI)
-
-O padrão é **500**, que é o que garante a distinção entre dígitos parecidos (6/8, 0/9,
-1/7). Resoluções menores são mais rápidas e servem para demonstração, mas erram mais: em
-DPI 200 o lote de referência produz uma leitura incorreta que em DPI 500 sai correta.
-
-## 📄 Os PDFs de entrada
-
-Arquivos `.pdf` **não são versionados** (estão no `.gitignore`), porque contêm dados reais
-de contribuintes. Depois de clonar, o repositório vem sem eles.
-
-- Pela **aplicação web** isso não importa: os arquivos são enviados pela tela.
-- Pela **linha de comando**, os caminhos padrão são `docs/boletos.pdf` e
-  `docs/consulta.pdf` — coloque os seus ali, ou aponte outro caminho com `--boletos` e
-  `--consulta`.
-
-## 🔌 API
-
-Documentação interativa (Swagger) em **http://localhost:8000/docs**.
-
-| Método | Rota | O que faz |
+| Option | Purpose | Default |
 |---|---|---|
-| `POST` | `/api/v1/auditorias` | Envia os dois PDFs e inicia a conferência; devolve um `job_id` |
-| `GET` | `/api/v1/auditorias/{job_id}/eventos` | Acompanhamento em tempo real (Server-Sent Events) |
-| `GET` | `/api/v1/auditorias/{job_id}` | Situação atual de uma auditoria |
-| `GET` | `/api/v1/auditorias/{job_id}/relatorio.csv` | Baixa o relatório |
-| `GET` | `/api/v1/auditorias` | Histórico das auditorias já realizadas |
+| `--boletos` | Scanned payment-slip PDF. | `docs/boletos.pdf` in the project root |
+| `--consulta` | Reference PDF. | `docs/consulta.pdf` in the project root |
+| `--saida` | Output CSV path. | `Relatorio_Final_Python.csv` in the project root |
+| `--dpi` | Rendering resolution. | `500` |
+| `--tesseract` | Tesseract executable. | Configured engine value |
+| `--poppler` | Poppler binary directory. | Configured engine value |
 
-Cada mensagem do stream é um JSON com `tipo` igual a `inicio`, `pagina`, `erro` ou `fim`.
-É esse formato que serve de contrato para o front-end.
+The CLI runs the same engine without annotated previews and writes a semicolon-separated CSV using Latin-1 encoding. Web CSV exports also use semicolons, with UTF-8 text. The CLI does not save audits to SQLite; persistence is handled by the API layer.
 
-## 🗄️ Histórico
+## Input format and current limitations
 
-O resultado de cada auditoria é gravado em SQLite (`pyconfer.db`, na raiz do projeto),
-guia a guia. Assim o histórico sobrevive ao reinício do servidor, e uma auditoria
-interrompida no meio mantém registrado o que já havia sido conferido. Para usar outro
-arquivo de banco, defina `PYCONFER_DB`.
+The parser targets the project's reference document layout; it is not a general parser for arbitrary invoices or payment slips.
 
-A imagem anotada de cada página **não** é guardada: pesa ~127 KB e serve apenas para a
-conferência visual do momento.
+- The reference PDF must contain extractable text. It is not processed with OCR.
+- Reference codes follow a pattern of four or five digits followed by `-0`.
+- Amount extraction expects two or three integer digits and two decimal digits; the reference parser expects a comma decimal separator.
+- Codes and amounts are paired by their order within each reference page, and payment-slip pages are matched to the resulting list by position. Extra totals, missing entries, or a different document order can misalign comparisons.
+- Scanned code extraction expects a 16-digit numeric sequence that becomes a four-to-six-digit code ending in zero after leading zeros are removed.
+- Missing or inaccurate OCR coordinates can prevent a field from being highlighted, even when a reading is available.
 
-## 🧪 Testes
+PDFs are excluded from version control because working documents contain taxpayer data. Supply your own PDFs through the interface, or create a local `docs/` folder for CLI inputs. The clone does not include the reference dataset.
+
+## API
+
+Interactive API documentation is available at [localhost:8000/docs](http://localhost:8000/docs) while the server is running. Existing Portuguese route and field names are preserved.
+
+| Method | Route | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/auditorias` | Upload multipart fields `boletos` and `consulta`; optional `dpi` query parameter defaults to 500. Returns `job_id` and `mensagem`. |
+| `GET` | `/api/v1/auditorias` | List saved audits, newest first; `limite` defaults to 50. |
+| `GET` | `/api/v1/auditorias/{job_id}/eventos` | Consume the live SSE stream. |
+| `GET` | `/api/v1/auditorias/{job_id}` | Retrieve audit status and counts. |
+| `GET` | `/api/v1/auditorias/{job_id}/paginas` | Retrieve report rows as JSON, including historical audits. |
+| `GET` | `/api/v1/auditorias/{job_id}/relatorio.csv` | Download the available report rows as CSV. |
+
+Each SSE message contains a JSON object with a `tipo` field:
+
+| `tipo` | Content |
+|---|---|
+| `inicio` | `total_paginas`, `total_consulta`, and `dpi`. |
+| `pagina` | Page number, total page count, and report row in `linha`; live previews may include `imagem`, `estrategia`, `achou_codigo`, and `achou_valor`. |
+| `erro` | Error description in `mensagem`. |
+| `fim` | `total_paginas` and `modelo`, currently `"Tesseract OCR"`. |
+
+Audit states are `processando`, `concluida`, `erro`, and `abandonada`. The browser currently displays resolution from `inicio.dpi`; it does not display `fim.modelo`. SSE is a live consumption channel, not a persisted event replay or broadcast system.
+
+The prototype has no authentication or user permissions. Its CORS middleware is configured with wildcard origins, methods, and headers, with credentials enabled. This configuration does not provide access control; the intended runtime is local.
+
+## Persistence and history
+
+SQLite stores audit metadata and report rows in the `auditoria` and `pagina` tables. The API saves each processed page, allowing earlier results to survive an interruption or server restart. Old reports can be reopened and exported even after their live in-memory entry is removed.
+
+Annotated images, original uploaded PDFs, the extracted reference list, and the browser timer are not retained in the database. Temporary uploads are removed when the worker exits normally or through its cleanup handler. Historical views therefore contain report data without the live annotated images.
+
+Persisted partial results are not an automatic resume mechanism. An abrupt server shutdown can leave an audit marked as processing; restart recovery is not implemented.
+
+## Tests
 
 ```bash
 python -m pytest
 ```
 
-A suíte roda em cerca de um segundo e não depende de Tesseract instalado nem de PDF de
-apoio — nos testes o leitor de PDF é substituído por texto fixo. Cobre o motor de
-conferência, o ciclo de vida das auditorias em memória e a persistência.
+The suite covers comparison rules, normalization, discrepancy classification, reference parsing, API validation and lifecycle behavior, and SQLite persistence. Tests use synthetic or mocked inputs and a temporary database; they do not require the private PDFs or an installed OCR toolchain. Leave `PYCONFER_DB` unset when running tests so the test configuration selects its disposable database.
 
-## 📁 Estrutura do projeto
+These tests do not establish OCR accuracy on real scans or validate the full browser workflow. Those require a separate run with suitable local documents.
 
-```
+## Project structure
+
+```text
 TCC/
 ├── core/
-│   ├── engine.py          # Motor: OCR, consenso, comparação
-│   └── armazenamento.py   # Histórico em SQLite
+│   ├── engine.py          # PDF extraction, OCR, consensus, and visual evidence
+│   └── armazenamento.py   # SQLite audit history
 ├── api/
-│   └── main.py            # API REST (FastAPI) + streaming SSE
-├── static/                # Front-end (sem build, sem Node)
-├── tests/                 # Suíte de testes
-├── docs/                  # PDFs de entrada (não versionados)
-├── conferidor.py          # Execução por linha de comando
-├── requirements.txt       # Dependências Python
-└── README.md              # Este arquivo
+│   └── main.py            # REST API, worker lifecycle, SSE, and static files
+├── static/                # HTML, CSS, and plain JavaScript; no build step
+├── tests/                 # Engine, API, and persistence tests
+├── docs/                  # Optional local PDF inputs; not included in the clone
+├── conferidor.py          # Command-line entry point
+├── requirements.txt       # Pinned Python dependencies
+├── pytest.ini             # Test configuration
+├── CONTRIBUTING.md        # Contribution workflow and team roadmap
+└── README.md
 ```
 
-O motor não conhece a API, e a API não conhece o front-end: as camadas se comunicam pelo
-contrato JSON, o que permite que o grupo trabalhe em paralelo.
+Both the CLI and API consume the engine's event generator. The API owns persistence and exposes the JSON contract consumed by the browser. The engine does not depend on FastAPI, SQLite, or the front end.
 
-## 🤝 Contribuindo
+## Contributing and next steps
 
-A divisão de responsabilidades do grupo está no [CONTRIBUTING.md](CONTRIBUTING.md).
-
-Crie uma branch para sua alteração e abra um pull request. Rode `python -m pytest` antes
-de enviar.
-
----
-**Última atualização:** Agosto/2026
+See [CONTRIBUTING.md](CONTRIBUTING.md) for team responsibilities and the next phase: authentication, shared storage, metrics, and a recorded human-review workflow. These are planned capabilities, not features of the current prototype.
