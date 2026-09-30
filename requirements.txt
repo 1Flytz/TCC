@@ -1,15 +1,15 @@
-# Motor de OCR e conferência
+# OCR and verification engine
 pdf2image==1.17.0
 pytesseract==0.3.13
 pypdf==6.15.0
 Pillow==12.3.0
 pandas==3.0.5
 
-# API REST + front-end local
+# REST API and local front end
 fastapi==0.121.2
 uvicorn==0.41.0
 python-multipart==0.0.20
 
-# Testes (rodar com: python -m pytest)
+# Tests (run with: python -m pytest)
 pytest==9.1.1
-httpx==0.28.1  # exigido pelo TestClient do FastAPI
+httpx==0.28.1  # required by FastAPI TestClient

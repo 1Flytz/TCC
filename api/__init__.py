@@ -1,1 +1,1 @@
-"""Camada de API REST do PyConfer."""
+"""PyConfer REST API package."""

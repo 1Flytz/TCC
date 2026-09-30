@@ -4,7 +4,7 @@
 
 PyConfer is an undergraduate final-year project (TCC) that compares registration codes and amounts from scanned payment slips (RLC / financial forms) against a reference PDF. It turns a page-by-page manual check into a batch report, with visual evidence showing where each field was read.
 
-The current application is a **local, single-user prototype** built with Python, FastAPI, SQLite, and plain JavaScript. Repository documentation is in English; the application interface, API fields, and report labels remain in Portuguese.
+The current application is a **local, single-user prototype** built with Python, FastAPI, SQLite, and plain JavaScript. Source identifiers, documentation, the interface, API fields, and report labels are in English. Input documents still follow the original Brazilian registration and monetary formats.
 
 ## Features
 
@@ -13,7 +13,7 @@ The current application is a **local, single-user prototype** built with Python,
 - Inspect annotated previews highlighting the registration code and amount.
 - Compare expected and extracted values, filter discrepancies, and inspect their categories.
 - Choose 200, 300, or 500 DPI and see the active resolution during processing.
-- Track elapsed time with the browser's **Tempo de Leitura** counter.
+- Track elapsed time with the browser's **Reading time** counter.
 - Reopen previous audit reports stored in SQLite and download CSV results.
 - Run the same verification engine from the command line.
 
@@ -33,11 +33,11 @@ Code comparison deliberately does not tolerate substitutions such as `6`/`8` or 
 
 | Report value | Meaning | Suggested review |
 |---|---|---|
-| `OUTRO CADASTRO` | The extracted code belongs to another registration in the reference list. | Check whether the wrong slip was included or OCR misread the code. |
-| `NAO LIDO` | The required field was not extracted. | Inspect scan quality and consider rescanning or increasing DPI. |
-| `VERIFICAR` | A field differs without meeting the categories above. | Compare the highlighted reading with the original slip. |
+| `OTHER REGISTRATION` | The extracted code belongs to another registration in the reference list. | Check whether the wrong slip was included or OCR misread the code. |
+| `UNREAD` | The required field was not extracted. | Inspect scan quality and consider rescanning or increasing DPI. |
+| `REVIEW` | A field differs without meeting the categories above. | Compare the highlighted reading with the original slip. |
 
-These categories help prioritize review; they do not prove whether a discrepancy comes from the document or the OCR. Overall report statuses are `OK`, `ERRO` (mismatch), and `FIM DA LISTA` (no usable expected registration for that position).
+These categories help prioritize review; they do not prove whether a discrepancy comes from the document or the OCR. Overall report statuses are `OK`, `ERROR` (mismatch), and `END OF LIST` (no usable expected registration for that position).
 
 ## Requirements
 
@@ -94,7 +94,7 @@ Ensure the database's parent directory exists. If the configured Tesseract file 
 python -m uvicorn api.main:app --reload
 ```
 
-Open [localhost:8000](http://localhost:8000), select both PDFs, choose a resolution, and click **Iniciar auditoria**. The results panel displays progress, active DPI, elapsed time, and matching and mismatching page counts. Select a result to inspect the expected values and annotated image. Download the CSV when processing ends.
+Open [localhost:8000](http://localhost:8000), select both PDFs, choose a resolution, and click **Start audit**. The results panel displays progress, active DPI, elapsed time, and matching and mismatching page counts. Select a result to inspect the expected values and annotated image. Download the CSV when processing ends.
 
 The default is **500 DPI**. Lower resolutions are available for faster runs, but may make similar digits harder to distinguish. The appropriate setting depends on scan quality; 500 DPI is not a guarantee of error-free recognition.
 
@@ -103,14 +103,14 @@ Keep the audit page open while processing. The live stream uses a bounded queue;
 ## Using the command line
 
 ```bash
-python conferidor.py --boletos docs/boletos.pdf --consulta docs/consulta.pdf
+python auditor.py --payment-slips docs/payment_slips.pdf --reference docs/reference.pdf
 ```
 
 | Option | Purpose | Default |
 |---|---|---|
-| `--boletos` | Scanned payment-slip PDF. | `docs/boletos.pdf` in the project root |
-| `--consulta` | Reference PDF. | `docs/consulta.pdf` in the project root |
-| `--saida` | Output CSV path. | `Relatorio_Final_Python.csv` in the project root |
+| `--payment-slips` | Scanned payment-slip PDF. | `docs/payment_slips.pdf` in the project root |
+| `--reference` | Reference PDF. | `docs/reference.pdf` in the project root |
+| `--output` | Output CSV path. | `Final_Report.csv` in the project root |
 | `--dpi` | Rendering resolution. | `500` |
 | `--tesseract` | Tesseract executable. | Configured engine value |
 | `--poppler` | Poppler binary directory. | Configured engine value |
@@ -132,37 +132,68 @@ PDFs are excluded from version control because working documents contain taxpaye
 
 ## API
 
-Interactive API documentation is available at [localhost:8000/docs](http://localhost:8000/docs) while the server is running. Existing Portuguese route and field names are preserved.
+Interactive API documentation is available at [localhost:8000/docs](http://localhost:8000/docs) while the server is running. Routes, upload fields, JSON keys, and status values use English names.
 
 | Method | Route | Purpose |
 |---|---|---|
-| `POST` | `/api/v1/auditorias` | Upload multipart fields `boletos` and `consulta`; optional `dpi` query parameter defaults to 500. Returns `job_id` and `mensagem`. |
-| `GET` | `/api/v1/auditorias` | List saved audits, newest first; `limite` defaults to 50. |
-| `GET` | `/api/v1/auditorias/{job_id}/eventos` | Consume the live SSE stream. |
-| `GET` | `/api/v1/auditorias/{job_id}` | Retrieve audit status and counts. |
-| `GET` | `/api/v1/auditorias/{job_id}/paginas` | Retrieve report rows as JSON, including historical audits. |
-| `GET` | `/api/v1/auditorias/{job_id}/relatorio.csv` | Download the available report rows as CSV. |
+| `POST` | `/api/v1/audits` | Upload multipart fields `payment_slips` and `reference`; optional `dpi` query parameter defaults to 500. Returns `job_id` and `message`. |
+| `GET` | `/api/v1/audits` | List saved audits, newest first; `limit` defaults to 50. |
+| `GET` | `/api/v1/audits/{job_id}/events` | Consume the live SSE stream. |
+| `GET` | `/api/v1/audits/{job_id}` | Retrieve audit status and counts. |
+| `GET` | `/api/v1/audits/{job_id}/pages` | Retrieve report rows as JSON, including historical audits. |
+| `GET` | `/api/v1/audits/{job_id}/report.csv` | Download the available report rows as CSV. |
 
-Each SSE message contains a JSON object with a `tipo` field:
+Each SSE message contains a JSON object with a `type` field:
 
-| `tipo` | Content |
+| `type` | Content |
 |---|---|
-| `inicio` | `total_paginas`, `total_consulta`, and `dpi`. |
-| `pagina` | Page number, total page count, and report row in `linha`; live previews may include `imagem`, `estrategia`, `achou_codigo`, and `achou_valor`. |
-| `erro` | Error description in `mensagem`. |
-| `fim` | `total_paginas` and `modelo`, currently `"Tesseract OCR"`. |
+| `start` | `total_pages`, `reference_count`, and `dpi`. |
+| `page` | Page number, total page count, and report row in `row`; live previews may include `image`, `strategy`, `code_found`, and `amount_found`. |
+| `error` | Error description in `message`. |
+| `end` | `total_pages` and `model`, currently `"Tesseract OCR"`. |
 
-Audit states are `processando`, `concluida`, `erro`, and `abandonada`. The browser currently displays resolution from `inicio.dpi`; it does not display `fim.modelo`. SSE is a live consumption channel, not a persisted event replay or broadcast system.
+Audit states are `processing`, `completed`, `error`, and `abandoned`. The browser currently displays resolution from `start.dpi`; it does not display `end.model`. SSE is a live consumption channel, not a persisted event replay or broadcast system.
 
 The prototype has no authentication or user permissions. Its CORS middleware is configured with wildcard origins, methods, and headers, with credentials enabled. This configuration does not provide access control; the intended runtime is local.
 
 ## Persistence and history
 
-SQLite stores audit metadata and report rows in the `auditoria` and `pagina` tables. The API saves each processed page, allowing earlier results to survive an interruption or server restart. Old reports can be reopened and exported even after their live in-memory entry is removed.
+SQLite stores audit metadata and report rows in the `audit` and `page` tables. The API saves each processed page, allowing earlier results to survive an interruption or server restart. Old reports can be reopened and exported even after their live in-memory entry is removed.
 
 Annotated images, original uploaded PDFs, the extracted reference list, and the browser timer are not retained in the database. Temporary uploads are removed when the worker exits normally or through its cleanup handler. Historical views therefore contain report data without the live annotated images.
 
 Persisted partial results are not an automatic resume mechanism. An abrupt server shutdown can leave an audit marked as processing; restart recovery is not implemented.
+
+## Upgrading from the Portuguese codebase
+
+This refactor changes the public names used by scripts and API clients. The bundled
+web interface uses the new contract. External integrations must update their routes,
+upload fields, JSON keys, status comparisons, and CSV column names; the previous
+API names and command-line flags are not aliases.
+
+| Previous name | Current name |
+|---|---|
+| `conferidor.py` | `auditor.py` |
+| `core/armazenamento.py` | `core/storage.py` |
+| `--boletos`, `--consulta`, `--saida` | `--payment-slips`, `--reference`, `--output` |
+| `/api/v1/auditorias` | `/api/v1/audits` |
+| `/eventos`, `/paginas`, `/relatorio.csv` | `/events`, `/pages`, `/report.csv` |
+| Upload fields `boletos`, `consulta` | `payment_slips`, `reference` |
+| Event keys `tipo`, `linha`, `imagem` | `type`, `row`, `image` |
+| Event types `inicio`, `pagina`, `erro`, `fim` | `start`, `page`, `error`, `end` |
+| `Relatorio_Final_Python.csv` | `Final_Report.csv` |
+
+Before starting the new server against an existing database, stop the old server
+and back up the database. Startup migrates the legacy tables, columns, statuses,
+and discrepancy categories in one transaction. Existing audit IDs, timestamps,
+document filenames, codes, and monetary values are preserved. Repeated startup is
+safe; conflicting old and new schemas stop the migration instead of merging or
+discarding records. Older versions must use the backup rather than the migrated file.
+
+Legacy Portuguese strings remain in `core/migrations.py` and its tests solely to
+identify existing data. Input PDFs are not renamed: select them in the interface or
+pass their existing paths explicitly to the CLI. Brazilian decimal separators and
+registration-code rules are unchanged by the English translation.
 
 ## Tests
 
@@ -170,9 +201,14 @@ Persisted partial results are not an automatic resume mechanism. An abrupt serve
 python -m pytest
 ```
 
-The suite covers comparison rules, normalization, discrepancy classification, reference parsing, API validation and lifecycle behavior, and SQLite persistence. Tests use synthetic or mocked inputs and a temporary database; they do not require the private PDFs or an installed OCR toolchain. Leave `PYCONFER_DB` unset when running tests so the test configuration selects its disposable database.
+The suite covers comparison rules, normalization, discrepancy classification, reference parsing, API validation and lifecycle behavior, and SQLite persistence. Tests use synthetic or mocked inputs and a temporary database; they do not require the private PDFs or an installed OCR toolchain. The test configuration always selects a disposable database, even if `PYCONFER_DB` is set.
 
 These tests do not establish OCR accuracy on real scans or validate the full browser workflow. Those require a separate run with suitable local documents.
+
+If Node.js is available, run the front-end contract smoke test with
+`node --test tests/frontend.test.cjs`. It executes the browser script against a
+simulated DOM and event stream without third-party packages. Node.js is optional
+for development checks and is not required to run PyConfer.
 
 ## Project structure
 
@@ -180,13 +216,14 @@ These tests do not establish OCR accuracy on real scans or validate the full bro
 TCC/
 ├── core/
 │   ├── engine.py          # PDF extraction, OCR, consensus, and visual evidence
-│   └── armazenamento.py   # SQLite audit history
+│   ├── storage.py         # SQLite audit history
+│   └── migrations.py      # Upgrade legacy history to the English schema
 ├── api/
 │   └── main.py            # REST API, worker lifecycle, SSE, and static files
 ├── static/                # HTML, CSS, and plain JavaScript; no build step
 ├── tests/                 # Engine, API, and persistence tests
 ├── docs/                  # Optional local PDF inputs; not included in the clone
-├── conferidor.py          # Command-line entry point
+├── auditor.py             # Command-line entry point
 ├── requirements.txt       # Pinned Python dependencies
 ├── pytest.ini             # Test configuration
 ├── CONTRIBUTING.md        # Contribution workflow and team roadmap

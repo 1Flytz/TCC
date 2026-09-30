@@ -37,7 +37,7 @@ The current database has two tables and stores audit history only.
 - Design queries for metrics by batch, operator, and time period. Distinguish agreement with the reference from measured OCR accuracy against reviewed data.
 - Define retention and backup policies for taxpayer information.
 
-**Starting point:** design the proposed schema and compare it with [`core/armazenamento.py`](core/armazenamento.py).
+**Starting point:** design the proposed schema and compare it with [`core/storage.py`](core/storage.py).
 
 ### 3. Front end — contributor to be assigned
 
@@ -69,7 +69,7 @@ These items refer to the team's separate working thesis document, not files incl
 1. Follow the setup instructions in [README.md](README.md) and create your own virtual environment.
 2. Create a branch for a focused change and coordinate ownership where needed.
 3. Preserve existing route names, JSON fields, and report labels unless a contract change has been agreed with its consumers.
-4. Run `python -m pytest` before submitting the change. Leave `PYCONFER_DB` unset so the tests use their temporary database.
+4. Run `python -m pytest` before submitting the change. Tests always use a temporary database.
 5. Open a pull request describing the problem, resulting behavior, and validation.
 6. Review and merge through a pull request rather than pushing directly to `main`.
 
@@ -86,7 +86,7 @@ Historical reports currently contain no annotated images. Features requiring lat
 ## Documentation conventions
 
 - Write repository documentation in English.
-- Keep literal commands, paths, API fields, status values, and interface labels consistent with the implementation, including existing Portuguese identifiers.
+- Use English for identifiers, comments, docstrings, API fields, and interface labels. Legacy database literals in the migration layer are the compatibility exception.
 - Separate implemented features from planned work.
 - Update setup instructions and API documentation when behavior changes.
 - State the dataset, resolution, method, and limitations behind accuracy or timing claims. The browser timer alone is not a controlled OCR benchmark.

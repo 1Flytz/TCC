@@ -1,275 +1,239 @@
-"""Testes do motor de conferência.
+"""Test exact registration comparison, amount normalization, and reference parsing.
 
-Cobrem as duas decisões que sustentam a auditoria — se o código lido bate com o
-esperado e como o valor monetário é normalizado — mais o pareamento código/valor
-extraído do PDF de consulta.
-
-Alguns testes fixam comportamentos arriscados de propósito (marcados com ALERTA
-ou LIMITE CONHECIDO). Eles não estão dizendo que a regra está certa; estão
-documentando o que o sistema faz hoje, para que qualquer mudança seja consciente.
-"""
+Known parser limitations are recorded explicitly to make behavior changes visible."""
 
 import pytest
 
 from core import engine
 
 # ==========================================
-# status_codigo
+# code_status
 # ==========================================
 
 
-@pytest.mark.parametrize("lido, esperado", [
+@pytest.mark.parametrize("read, expected", [
     ("116530", "116530"),
     ("113640", "113640"),
-    ("59750", "59750"),      # sufixo de 5 dígitos
+    ("59750", "59750"),      # five-digit suffix
 ])
-def test_codigo_identico_e_conforme(lido, esperado):
-    assert engine.status_codigo(lido, esperado) == "OK"
+def test_identical_code_matches(read, expected):
+    assert engine.code_status(read, expected) == "OK"
 
 
-@pytest.mark.parametrize("lido, esperado", [
+@pytest.mark.parametrize("read, expected", [
     ("113640", "113610"),   # 4 -> 1
     ("61990", "61890"),     # 9 -> 8
     ("116530", "116230"),   # 5 -> 2
     ("60700", "60900"),     # 7 -> 9
 ])
-def test_diferenca_fora_da_lista_de_confusoes_e_apontada(lido, esperado):
-    assert engine.status_codigo(lido, esperado) == "DIFERENTE"
+def test_unrelated_digit_changes_are_flagged(read, expected):
+    assert engine.code_status(read, expected) == "MISMATCH"
 
 
-@pytest.mark.parametrize("lido, esperado, motivo", [
-    ("0", "116530", "OCR não conseguiu ler nada na guia"),
-    ("", "116530", "leitura vazia"),
-    ("116530", "N/A", "a consulta acabou antes das guias"),
-    ("116530", "", "esperado vazio"),
+@pytest.mark.parametrize("read, expected, reason", [
+    ("0", "116530", "OCR could not read the slip"),
+    ("", "116530", "empty reading"),
+    ("116530", "N/A", "reference list ended before the slips"),
+    ("116530", "", "empty expected value"),
 ])
-def test_sem_par_valido_o_resultado_e_diferente(lido, esperado, motivo):
-    assert engine.status_codigo(lido, esperado) == "DIFERENTE", motivo
+def test_invalid_pairs_do_not_match(read, expected, reason):
+    assert engine.code_status(read, expected) == "MISMATCH", reason
 
 
-def test_codigo_que_nao_termina_em_zero_nunca_confere():
-    """Só sufixos terminados em 0 entram na comparação.
-
-    Na prática todo código da lista mestre termina em 0 (o `-0` é reposto por
-    `extrair_lista_mestre`), então isso não aparece em produção — mas explica por
-    que dois códigos idênticos podem sair como DIFERENTE.
-    """
-    assert engine.status_codigo("12345", "12345") == "DIFERENTE"
+def test_codes_without_trailing_zero_do_not_match():
+    """Codes without trailing zero do not match."""
+    assert engine.code_status("12345", "12345") == "MISMATCH"
 
 
-@pytest.mark.parametrize("lido, esperado, confusao", [
-    ("116110", "116170", "1 lido como 7"),
-    ("113640", "113840", "6 lido como 8"),
-    ("119000", "119090", "0 lido como 9"),
-    ("116110", "116770", "dois 1 lidos como 7"),
+@pytest.mark.parametrize("read, expected, confusion", [
+    ("116110", "116170", "1 read as 7"),
+    ("113640", "113840", "6 read as 8"),
+    ("119000", "119090", "0 read as 9"),
+    ("116110", "116770", "two 1s read as 7"),
 ])
-def test_confusao_de_ocr_e_apontada_em_vez_de_absorvida(lido, esperado, confusao):
-    """A comparação é exata de propósito — ver o docstring de `status_codigo`.
-
-    Estes quatro pares são cadastros que existem de verdade no lote de referência.
-    Quando havia tolerância a confusões de OCR, todos passavam como conformes: uma
-    divergência real sumia sem ninguém ver.
-    """
-    assert engine.status_codigo(lido, esperado) == "DIFERENTE", confusao
+def test_ocr_digit_confusions_are_flagged(read, expected, confusion):
+    """Ocr digit confusions are flagged."""
+    assert engine.code_status(read, expected) == "MISMATCH", confusion
 
 
-def test_nenhum_par_de_cadastros_distintos_pode_ser_dado_como_igual():
-    """Trava de regressão para a tolerância que foi removida.
-
-    Passa por todos os pares de códigos do lote de referência e exige que dois
-    cadastros diferentes nunca sejam considerados o mesmo. Antes da mudança havia
-    50 pares assim.
-    """
+def test_distinct_registrations_never_match():
+    """Distinct registrations never match."""
     from itertools import combinations
 
-    codigos = [
+    codes = [
         "113640", "113840", "116110", "116170", "116770", "116250", "118250",
         "116700", "118700", "116810", "118870", "119000", "119090", "118680",
         "118860", "118880", "117510", "117570",
     ]
-    colisoes = [
-        (a, b) for a, b in combinations(codigos, 2)
-        if engine.status_codigo(a, b) == "OK"
+    collisions = [
+        (a, b) for a, b in combinations(codes, 2)
+        if engine.code_status(a, b) == "OK"
     ]
-    assert colisoes == []
+    assert collisions == []
 
 
 # ==========================================
-# classificar_divergencia
+# classify_discrepancy
 # ==========================================
 
-CADASTROS = {"115870", "118870", "116110", "116170"}
+REGISTRATIONS = {"115870", "118870", "116110", "116170"}
 
 
-def _resultado(codigo="115870", valor="76,82", status_codigo="OK", status_valor="OK", status_geral="ERRO"):
+def _result(code="115870", amount="76,82", code_status="OK", amount_status="OK", overall_status="ERROR"):
     return {
-        "codigo": codigo,
-        "valor": valor,
-        "status_codigo": status_codigo,
-        "status_valor": status_valor,
-        "status_geral": status_geral,
+        "code": code,
+        "amount": amount,
+        "code_status": code_status,
+        "amount_status": amount_status,
+        "overall_status": overall_status,
     }
 
 
-def test_pagina_conforme_nao_recebe_natureza():
-    resultado = _resultado(status_geral="OK")
-    assert engine.classificar_divergencia(resultado, CADASTROS) == ""
+def test_matching_page_has_no_category():
+    result = _result(overall_status="OK")
+    assert engine.classify_discrepancy(result, REGISTRATIONS) == ""
 
 
-def test_codigo_lido_de_outra_guia_do_lote_e_o_caso_grave():
-    """O OCR leu, na guia de 115870, o numero 118870 — que existe no mesmo lote.
-
-    Aconteceu de verdade, em DPI 300, na pagina 44 do lote de referencia. E o unico
-    caso com risco financeiro direto: a guia pode ter sido trocada.
-    """
-    resultado = _resultado(codigo="118870", status_codigo="DIFERENTE")
-    assert engine.classificar_divergencia(resultado, CADASTROS) == engine.NATUREZA_OUTRO_CADASTRO
+def test_another_registration_is_prioritized():
+    """Another registration is prioritized."""
+    result = _result(code="118870", code_status="MISMATCH")
+    assert engine.classify_discrepancy(result, REGISTRATIONS) == engine.CATEGORY_OTHER_REGISTRATION
 
 
-@pytest.mark.parametrize("codigo", ["0", "", None])
-def test_codigo_nao_extraido_e_falha_de_leitura(codigo):
-    resultado = _resultado(codigo=codigo, status_codigo="DIFERENTE")
-    assert engine.classificar_divergencia(resultado, CADASTROS) == engine.NATUREZA_NAO_LIDO
+@pytest.mark.parametrize("code", ["0", "", None])
+def test_missing_code_is_unread(code):
+    result = _result(code=code, code_status="MISMATCH")
+    assert engine.classify_discrepancy(result, REGISTRATIONS) == engine.CATEGORY_UNREAD
 
 
-def test_codigo_que_nao_existe_no_lote_fica_para_verificacao():
-    """716110 nao e cadastro de ninguem: provavel sujeira no scan (DPI 200, pag. 47)."""
-    resultado = _resultado(codigo="716110", status_codigo="DIFERENTE")
-    assert engine.classificar_divergencia(resultado, CADASTROS) == engine.NATUREZA_VERIFICAR
+def test_unknown_code_requires_review():
+    """Unknown code requires review."""
+    result = _result(code="716110", code_status="MISMATCH")
+    assert engine.classify_discrepancy(result, REGISTRATIONS) == engine.CATEGORY_REVIEW
 
 
-def test_valor_nao_lido_com_codigo_correto():
-    resultado = _resultado(valor="0,00", status_valor="DIFERENTE")
-    assert engine.classificar_divergencia(resultado, CADASTROS) == engine.NATUREZA_NAO_LIDO
+def test_missing_amount_with_matching_code_is_unread():
+    result = _result(amount="0,00", amount_status="MISMATCH")
+    assert engine.classify_discrepancy(result, REGISTRATIONS) == engine.CATEGORY_UNREAD
 
 
-def test_valor_diferente_com_codigo_correto_fica_para_verificacao():
-    resultado = _resultado(valor="99,99", status_valor="DIFERENTE")
-    assert engine.classificar_divergencia(resultado, CADASTROS) == engine.NATUREZA_VERIFICAR
+def test_amount_mismatch_requires_review():
+    result = _result(amount="99,99", amount_status="MISMATCH")
+    assert engine.classify_discrepancy(result, REGISTRATIONS) == engine.CATEGORY_REVIEW
 
 
-def test_codigo_grave_tem_prioridade_sobre_valor_nao_lido():
-    """Havendo problema nos dois campos, o do codigo e o que importa relatar."""
-    resultado = _resultado(
-        codigo="118870", valor="0,00", status_codigo="DIFERENTE", status_valor="DIFERENTE"
+def test_other_registration_takes_priority_over_unread_amount():
+    """Other registration takes priority over unread amount."""
+    result = _result(
+        code="118870", amount="0,00", code_status="MISMATCH", amount_status="MISMATCH"
     )
-    assert engine.classificar_divergencia(resultado, CADASTROS) == engine.NATUREZA_OUTRO_CADASTRO
+    assert engine.classify_discrepancy(result, REGISTRATIONS) == engine.CATEGORY_OTHER_REGISTRATION
 
 
 # ==========================================
-# normalizar_valor
+# normalize_amount
 # ==========================================
 
 
-@pytest.mark.parametrize("texto, esperado", [
+@pytest.mark.parametrize("text, expected", [
     ("82,30", "82,30"),
-    ("76.82", "76,82"),                 # ponto no lugar da vírgula
-    ("Total a pagar 82,30 ate 21/11", "82,30"),  # extrai de dentro da linha
-    ("82‚30", "82,30"),            # vírgula baixa
-    ("82’30", "82,30"),            # aspa simples
-    ("82`30", "82,30"),                 # crase
-    ("82´30", "82,30"),            # acento agudo
-    ("999,99", "999,99"),               # teto aceito
+    ("76.82", "76,82"),                 # period instead of comma
+    ("Total due 82,30 by 21/11", "82,30"),  # extract from a longer line
+    ("82‚30", "82,30"),            # low comma
+    ("82’30", "82,30"),            # curly apostrophe
+    ("82`30", "82,30"),                 # backtick
+    ("82´30", "82,30"),            # acute accent
+    ("999,99", "999,99"),               # accepted upper bound
 ])
-def test_valor_normalizado_para_o_formato_do_relatorio(texto, esperado):
-    assert engine.normalizar_valor(texto) == esperado
+def test_amount_is_normalized_to_report_format(text, expected):
+    assert engine.normalize_amount(text) == expected
 
 
-@pytest.mark.parametrize("texto", [
-    "1000,00",   # acima do teto de 999,99
-    "82,3",      # uma casa decimal só
+@pytest.mark.parametrize("text", [
+    "1000,00",   # above the 999,99 limit
+    "82,3",      # only one decimal place
     "abc",
     "",
     None,
 ])
-def test_valor_invalido_vira_none(texto):
-    assert engine.normalizar_valor(texto) is None
+def test_invalid_amount_returns_none(text):
+    assert engine.normalize_amount(text) is None
 
 
-def test_valor_abaixo_de_dez_reais_nao_e_reconhecido():
-    """LIMITE CONHECIDO: a regex exige 2 ou 3 dígitos antes da vírgula.
+def test_amount_below_ten_reais_is_not_recognized():
+    """Known limitation: the regex requires two or three integer digits.
 
-    Qualquer guia abaixo de R$ 10,00 sai como não lida (vira "0,00" e é marcada
-    como divergente). Não afeta o lote atual, cujos valores vão de 54,87 a 160,71.
-    """
-    assert engine.normalizar_valor("5,30") is None
+    Amounts below 10,00 are not recognized; keep this limitation explicit."""
+    assert engine.normalize_amount("5,30") is None
 
 
 # ==========================================
-# extrair_lista_mestre
+# extract_reference_list
 # ==========================================
 
 
-class _PaginaFalsa:
-    def __init__(self, texto):
-        self._texto = texto
+class _FakePage:
+    def __init__(self, text):
+        self._text = text
 
     def extract_text(self):
-        return self._texto
+        return self._text
 
 
-class _LeitorFalso:
-    def __init__(self, paginas):
-        self.pages = [_PaginaFalsa(texto) for texto in paginas]
+class _FakeReader:
+    def __init__(self, pages):
+        self.pages = [_FakePage(text) for text in pages]
 
 
 @pytest.fixture
-def consulta(monkeypatch):
-    """Substitui o pypdf por um leitor de texto fixo.
-
-    Deixa o teste focado no que é do projeto (a regex e o pareamento) e dispensa
-    um PDF de apoio no repositório — os PDFs reais são ignorados pelo git.
-    """
-    def _ler(*paginas):
-        monkeypatch.setattr(engine.pypdf, "PdfReader", lambda _caminho: _LeitorFalso(paginas))
-        return engine.extrair_lista_mestre("consulta_ficticia.pdf")
-    return _ler
+def reference(monkeypatch):
+    """Replace the PDF reader with fixed text to test parsing without private PDFs."""
+    def _read(*pages):
+        monkeypatch.setattr(engine.pypdf, "PdfReader", lambda _path: _FakeReader(pages))
+        return engine.extract_reference_list("sample_reference.pdf")
+    return _read
 
 
-def test_lista_mestre_repoe_o_zero_do_sufixo(consulta):
-    """No PDF o código aparece como `11364-0`; no relatório ele vira `113640`."""
-    assert consulta("11364-0 76,82\n5975-0 82,30") == [
-        {"codigo": "113640", "valor": "76,82"},
-        {"codigo": "59750", "valor": "82,30"},
+def test_reference_list_restores_trailing_zero(reference):
+    """Reference list restores trailing zero."""
+    assert reference("11364-0 76,82\n5975-0 82,30") == [
+        {"code": "113640", "amount": "76,82"},
+        {"code": "59750", "amount": "82,30"},
     ]
 
 
-def test_codigo_sem_valor_correspondente_fica_na(consulta):
-    assert consulta("11364-0 5975-0 76,82") == [
-        {"codigo": "113640", "valor": "76,82"},
-        {"codigo": "59750", "valor": "N/A"},
+def test_code_without_amount_gets_na(reference):
+    assert reference("11364-0 5975-0 76,82") == [
+        {"code": "113640", "amount": "76,82"},
+        {"code": "59750", "amount": "N/A"},
     ]
 
 
-def test_valor_sem_codigo_correspondente_fica_na(consulta):
-    assert consulta("11364-0 76,82 82,30") == [
-        {"codigo": "113640", "valor": "76,82"},
-        {"codigo": "N/A", "valor": "82,30"},
+def test_amount_without_code_gets_na(reference):
+    assert reference("11364-0 76,82 82,30") == [
+        {"code": "113640", "amount": "76,82"},
+        {"code": "N/A", "amount": "82,30"},
     ]
 
 
-def test_pagina_sem_texto_e_ignorada(consulta):
-    assert consulta("", "11364-0 76,82") == [{"codigo": "113640", "valor": "76,82"}]
+def test_page_without_text_is_skipped(reference):
+    assert reference("", "11364-0 76,82") == [{"code": "113640", "amount": "76,82"}]
 
 
-def test_pdf_ilegivel_devolve_lista_vazia(monkeypatch):
-    """Um erro de leitura não pode derrubar a auditoria inteira."""
-    def explodir(_caminho):
-        raise OSError("PDF corrompido")
+def test_unreadable_pdf_returns_empty_list(monkeypatch):
+    """Unreadable pdf returns empty list."""
+    def raise_read_error(_path):
+        raise OSError("Corrupt PDF")
 
-    monkeypatch.setattr(engine.pypdf, "PdfReader", explodir)
-    assert engine.extrair_lista_mestre("qualquer.pdf") == []
+    monkeypatch.setattr(engine.pypdf, "PdfReader", raise_read_error)
+    assert engine.extract_reference_list("sample.pdf") == []
 
 
-def test_pareamento_e_posicional_e_desloca_com_valor_extra(consulta):
-    """ALERTA: código e valor são pareados por posição na página, não por linha.
+def test_extra_amount_shifts_positional_pairing(reference):
+    """Known limitation: reference fields are paired by position, not by line.
 
-    Basta um valor a mais em qualquer lugar (um total, uma taxa, um cabeçalho) para
-    tudo deslocar: aqui o código 113640 recebe 99,99, que é o total da página, e o
-    valor correto dele vai parar numa linha órfã. A partir desse ponto a página
-    inteira sai errada.
-    """
-    assert consulta("Total 99,99\n11364-0 76,82") == [
-        {"codigo": "113640", "valor": "99,99"},
-        {"codigo": "N/A", "valor": "76,82"},
+    An extra total shifts the code/amount pairing and creates an orphan amount."""
+    assert reference("Total 99,99\n11364-0 76,82") == [
+        {"code": "113640", "amount": "99,99"},
+        {"code": "N/A", "amount": "76,82"},
     ]
