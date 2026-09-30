@@ -1,1 +1,1 @@
-"""Núcleo do PyConfer: motor de OCR, consenso e conferência."""
+"""PyConfer OCR, consensus, and verification core."""

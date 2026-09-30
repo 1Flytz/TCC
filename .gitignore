@@ -41,10 +41,11 @@ Thumbs.db
 *.pdf
 .env
 
-# Saida gerada pela auditoria (varia a cada execucao)
+# Generated reports, including the legacy filename
+Final_Report.csv
 Relatorio_Final_Python.csv
 
-# Historico local das auditorias (SQLite; -wal e -shm sao gerados pelo modo WAL)
+# Local audit history and SQLite WAL sidecars
 pyconfer.db
 pyconfer.db-wal
 pyconfer.db-shm

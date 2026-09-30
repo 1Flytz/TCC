@@ -1,32 +1,23 @@
-"""Configuração comum dos testes.
-
-Redireciona o histórico para um banco descartável **antes** de importar a API — que
-cria o esquema já na importação. Sem isso, rodar a suíte escreveria no
-`pyconfer.db` de trabalho.
-"""
+"""Select a disposable database before importing the API and isolate test history."""
 
 import os
 import tempfile
 
-os.environ.setdefault(
-    "PYCONFER_DB",
-    os.path.join(tempfile.mkdtemp(prefix="pyconfer_testes_"), "historico.db"),
+# Always isolate tests, even when the developer configured a production database.
+os.environ["PYCONFER_DB"] = os.path.join(
+    tempfile.mkdtemp(prefix="pyconfer_tests_"), "history.db"
 )
 
-import pytest  # noqa: E402  (precisa vir depois da variável de ambiente)
+import pytest  # noqa: E402 (configure the test database before importing)
 
-from core import armazenamento  # noqa: E402
+from core import storage  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def historico_limpo():
-    """Cada teste começa com o histórico vazio.
-
-    Esvazia as tabelas em vez de apagar o arquivo: no Windows, remover um banco
-    SQLite que ainda tenha handle aberto levanta PermissionError.
-    """
-    armazenamento.criar_esquema()
-    with armazenamento._conexao() as conexao:
-        conexao.execute("DELETE FROM pagina")
-        conexao.execute("DELETE FROM auditoria")
+def clean_history():
+    """Clear temporary history between tests without deleting an open SQLite file."""
+    storage.create_schema()
+    with storage._connection() as connection:
+        connection.execute("DELETE FROM page")
+        connection.execute("DELETE FROM audit")
     yield

@@ -1,16 +1,7 @@
-"""
-API REST do PyConfer (execução local).
+"""Local REST API and static front end for PyConfer.
 
-Expõe o motor de conferência via HTTP e transmite o resultado de cada página em
-tempo real por Server-Sent Events (SSE), permitindo que o front-end acompanhe a
-auditoria enquanto ela acontece.
-
-Como o OCR é uma operação bloqueante de CPU, cada auditoria roda em uma thread
-separada que publica os eventos em uma fila; o endpoint SSE apenas consome essa
-fila. Assim o event loop do FastAPI nunca fica travado.
-
-Para subir:  uvicorn api.main:app --reload
-"""
+A worker thread runs blocking OCR and publishes page events to a bounded queue.
+The SSE endpoint consumes those events. Start with uvicorn api.main:app --reload."""
 
 import io
 import json
@@ -31,14 +22,14 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from core import armazenamento, engine
+from core import storage, engine
 
 app = FastAPI(
     title="PyConfer API",
     version="1.0.0",
     description=(
-        "Automatiza a conferência de guias (RLC / fichas financeiras): compara o código "
-        "e o valor lidos por OCR nos boletos com os dados do PDF de consulta."
+        "Verify financial payment slips by comparing OCR registration codes "
+        "and amounts against a reference PDF."
     ),
 )
 
@@ -50,323 +41,277 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-armazenamento.criar_esquema()
+storage.create_schema()
 
-# Auditorias vivas. A memória atende quem está acompanhando agora (é dela que sai o
-# stream); o histórico durável fica no SQLite, e é de lá que vêm as consultas a
-# auditorias antigas, já descartadas daqui.
-AUDITORIAS: dict[str, dict] = {}
+# Live audits are held in memory; older reports are read from SQLite.
+AUDITS: dict[str, dict] = {}
 
-_SENTINELA = object()
+_SENTINEL = object()
 
-# Cada evento de página carrega a imagem anotada em base64 (~127 KB), então um lote de
-# 250 guias soma mais de 30 MB. Os limites abaixo devolvem essa memória quando o
-# navegador vai embora no meio da auditoria ou quando o registro envelhece.
-TAMANHO_MAXIMO_FILA = 8           # eventos aguardando entrega ao navegador
-SEGUNDOS_SEM_CONSUMO = 60         # fila cheia por esse tempo => ninguém está assistindo
-TTL_AUDITORIA_SEGUNDOS = 60 * 60  # auditorias encerradas expiram depois de uma hora
-MAX_AUDITORIAS = 20               # ... ou quando o registro passa desse total
+# Bound queues and retained audits to release large image payloads after use.
+MAX_QUEUE_SIZE = 8           # events awaiting browser consumption
+CONSUMER_TIMEOUT_SECONDS = 60         # full queue timeout before abandoning the audit
+AUDIT_TTL_SECONDS = 60 * 60  # expire finished audits after one hour
+MAX_AUDITS = 20               # maximum retained audits, excluding running jobs
 
 
-class AuditoriaCriada(BaseModel):
+class AuditCreated(BaseModel):
     job_id: str
-    mensagem: str
+    message: str
 
 
-class AuditoriaNoHistorico(BaseModel):
+class AuditHistoryEntry(BaseModel):
     job_id: str
-    criada_em: str
+    created_at: str
     status: str
-    total_paginas: int | None
-    paginas_processadas: int
-    conformes: int
-    divergentes: int
+    total_pages: int | None
+    processed_pages: int
+    matched: int
+    mismatched: int
 
 
-class ResumoAuditoria(BaseModel):
+class AuditSummary(BaseModel):
     job_id: str
     status: str
-    paginas_processadas: int
-    total_paginas: int | None
-    conformes: int
-    divergentes: int
-    criada_em: str
+    processed_pages: int
+    total_pages: int | None
+    matched: int
+    mismatched: int
+    created_at: str
 
 
-def _persistir(operacao, *args) -> None:
-    """Grava no histórico sem deixar uma falha de banco derrubar a auditoria.
-
-    A conferência acontece em memória e é entregue pelo stream; o histórico é um
-    complemento. Se o SQLite falhar, o operador ainda termina o trabalho e baixa o
-    CSV — o que se perde é o registro, e isso aparece no log.
-    """
+def _persist(operation, *args) -> None:
+    """Log SQLite failures without interrupting live verification or CSV export."""
     try:
-        operacao(*args)
+        operation(*args)
     except sqlite3.Error as e:
-        print(f"[historico] falha em {operacao.__name__}: {e}")
+        print(f"[history] failed in {operation.__name__}: {e}")
 
 
-def _esvaziar_fila(fila: queue.Queue) -> None:
-    """Descarta os eventos não entregues, liberando as imagens que eles carregam."""
+def _drain_queue(event_queue: queue.Queue) -> None:
+    """Release pending events and their annotated images."""
     while True:
         try:
-            fila.get_nowait()
+            event_queue.get_nowait()
         except queue.Empty:
             return
 
 
-def _publicar_encerramento(fila: queue.Queue, item) -> None:
-    """Entrega um aviso de fim de stream mesmo que a fila esteja cheia.
-
-    Sem isso, um `put` bloqueante em fila cheia deixaria a thread da auditoria presa
-    para sempre justamente no caminho em que ninguém está consumindo.
-    """
+def _publish_shutdown(event_queue: queue.Queue, item) -> None:
+    """Publish a shutdown marker without blocking when the queue is full."""
     try:
-        fila.put_nowait(item)
+        event_queue.put_nowait(item)
     except queue.Full:
-        _esvaziar_fila(fila)
-        fila.put_nowait(item)
+        _drain_queue(event_queue)
+        event_queue.put_nowait(item)
 
 
-def _limpar_auditorias_antigas() -> None:
-    """Remove auditorias já encerradas para a memória não crescer a cada execução.
-
-    Auditorias em andamento nunca são descartadas. As demais saem por idade (TTL) ou
-    quando o registro ultrapassa `MAX_AUDITORIAS`, começando pelas mais antigas.
-    """
-    agora = time.monotonic()
-    encerradas = sorted(
-        (dados["iniciada_em"], job_id)
-        for job_id, dados in AUDITORIAS.items()
-        if dados["status"] != "processando"
+def _purge_old_audits() -> None:
+    """Expire completed audits by age or count, preserving all running audits."""
+    now = time.monotonic()
+    finished_audits = sorted(
+        (data["started_at"], job_id)
+        for job_id, data in AUDITS.items()
+        if data["status"] != "processing"
     )
 
-    excedente = max(0, len(AUDITORIAS) - MAX_AUDITORIAS)
-    descartar = {job_id for _inicio, job_id in encerradas[:excedente]}
-    descartar.update(job_id for inicio, job_id in encerradas if agora - inicio > TTL_AUDITORIA_SEGUNDOS)
+    excess = max(0, len(AUDITS) - MAX_AUDITS)
+    discard = {job_id for _started_at, job_id in finished_audits[:excess]}
+    discard.update(job_id for start, job_id in finished_audits if now - start > AUDIT_TTL_SECONDS)
 
-    for job_id in descartar:
-        AUDITORIAS.pop(job_id, None)
+    for job_id in discard:
+        AUDITS.pop(job_id, None)
 
 
-def _executar_auditoria(job_id: str, caminho_boletos: str, caminho_consulta: str, dpi: int, pasta_temp: str):
-    """Roda a auditoria em thread separada, publicando cada página na fila do job."""
-    auditoria = AUDITORIAS[job_id]
-    fila = auditoria["fila"]
+def _execute_audit(job_id: str, payment_slips_path: str, reference_path: str, dpi: int, temp_directory: str):
+    """Run verification in a worker thread and publish per-page events."""
+    audit = AUDITS[job_id]
+    event_queue = audit["event_queue"]
     try:
-        for evento in engine.realizar_auditoria_stream(caminho_boletos, caminho_consulta, dpi=dpi):
-            if evento["tipo"] == "pagina":
-                auditoria["relatorio"].append(evento["linha"])
-                if evento["linha"]["Status Geral"] == "OK":
-                    auditoria["conformes"] += 1
-                elif evento["linha"]["Status Geral"] == "ERRO":
-                    auditoria["divergentes"] += 1
-                
-                _persistir(armazenamento.salvar_pagina, job_id, evento["linha"])
-            elif evento["tipo"] == "inicio":
-                auditoria["total_paginas"] = evento["total_paginas"]
-                _persistir(armazenamento.atualizar_status, job_id, "processando", evento["total_paginas"])
-            elif evento["tipo"] == "fim":
-                # Adicionado para suportar o novo ranking antes de fechar a fila
-                auditoria["status"] = "concluida"
-                _publicar_encerramento(fila, evento)
-                break # Sai do loop pois o evento já foi publicado
+        for event in engine.stream_audit(payment_slips_path, reference_path, dpi=dpi):
+            if event["type"] == "page":
+                audit["report"].append(event["row"])
+                if event["row"]["Overall Status"] == "OK":
+                    audit["matched"] += 1
+                elif event["row"]["Overall Status"] == "ERROR":
+                    audit["mismatched"] += 1
+
+                _persist(storage.save_page, job_id, event["row"])
+            elif event["type"] == "start":
+                audit["total_pages"] = event["total_pages"]
+                _persist(storage.update_status, job_id, "processing", event["total_pages"])
+            elif event["type"] == "end":
+                # Publish the final event before closing the stream.
+                audit["status"] = "completed"
+                _publish_shutdown(event_queue, event)
+                break # the final event has already been published
 
             try:
-                # Publica eventos de página e início normalmente
-                if evento["tipo"] != "fim":
-                    fila.put(evento, timeout=SEGUNDOS_SEM_CONSUMO)
+                # Publish start and page events with a consumer timeout.
+                if event["type"] != "end":
+                    event_queue.put(event, timeout=CONSUMER_TIMEOUT_SECONDS)
             except queue.Full:
-                auditoria["status"] = "abandonada"
-                _esvaziar_fila(fila)
+                audit["status"] = "abandoned"
+                _drain_queue(event_queue)
                 return
-        
-        # Garante que o status final seja concluída caso saia do loop
-        auditoria["status"] = "concluida"
+
+        # Mark normal generator completion as completed.
+        audit["status"] = "completed"
     except Exception as e:
-        auditoria["status"] = "erro"
-        print("Erro crítico capturado na execução:")
+        audit["status"] = "error"
+        print("Critical error during audit execution:")
         traceback.print_exc()
-        _publicar_encerramento(fila, {"tipo": "erro", "mensagem": f"{type(e).__name__}: {e}"})
+        _publish_shutdown(event_queue, {"type": "error", "message": f"{type(e).__name__}: {e}"})
     finally:
-        # `auditoria["status"]` já reflete o desfecho: concluida, erro ou abandonada.
-        _persistir(armazenamento.atualizar_status, job_id, auditoria["status"])
-        _publicar_encerramento(fila, _SENTINELA)
-        shutil.rmtree(pasta_temp, ignore_errors=True)
+        # Persist the final state and release the queue consumer and temporary files.
+        _persist(storage.update_status, job_id, audit["status"])
+        _publish_shutdown(event_queue, _SENTINEL)
+        shutil.rmtree(temp_directory, ignore_errors=True)
 
 
-@app.post("/api/v1/auditorias", response_model=AuditoriaCriada, tags=["Auditoria"])
-async def criar_auditoria(
-    boletos: UploadFile = File(..., description="PDF com as guias digitalizadas."),
-    consulta: UploadFile = File(..., description="PDF de consulta com a lista mestre."),
+@app.post("/api/v1/audits", response_model=AuditCreated, tags=["Audit"])
+async def create_audit(
+    payment_slips: UploadFile = File(..., description="PDF containing scanned payment slips."),
+    reference: UploadFile = File(..., description="Reference PDF containing the master list."),
     dpi: int = 500,
 ):
-    """Recebe os dois PDFs e inicia a auditoria em segundo plano.
+    """Upload both PDFs and start a background audit.
 
-    Retorna imediatamente um `job_id`; o acompanhamento é feito pelo endpoint de
-    eventos. O total de lançamentos lidos na consulta chega no primeiro evento do
-    stream (`inicio`) — apurá-lo aqui custaria reler o PDF de consulta (~1,3 s) para
-    adiantar um número que o stream entrega logo em seguida.
-    """
-    for arquivo in (boletos, consulta):
-        if not (arquivo.filename or "").lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail=f"'{arquivo.filename}' não é um PDF.")
+    Returns a job ID immediately. Reference and page counts arrive in the first
+    stream event, avoiding a redundant reference-PDF read in this request."""
+    for file in (payment_slips, reference):
+        if not (file.filename or "").lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail=f"'{file.filename}' is not a PDF.")
 
-    pasta_temp = tempfile.mkdtemp(prefix="pyconfer_")
-    caminho_boletos = f"{pasta_temp}/boletos.pdf"
-    caminho_consulta = f"{pasta_temp}/consulta.pdf"
+    temp_directory = tempfile.mkdtemp(prefix="pyconfer_")
+    payment_slips_path = f"{temp_directory}/payment_slips.pdf"
+    reference_path = f"{temp_directory}/reference.pdf"
 
-    for arquivo, destino in ((boletos, caminho_boletos), (consulta, caminho_consulta)):
-        with open(destino, "wb") as saida:
-            shutil.copyfileobj(arquivo.file, saida)
+    for file, destination in ((payment_slips, payment_slips_path), (reference, reference_path)):
+        with open(destination, "wb") as output:
+            shutil.copyfileobj(file.file, output)
 
-    _limpar_auditorias_antigas()
+    _purge_old_audits()
 
     job_id = uuid.uuid4().hex[:12]
-    AUDITORIAS[job_id] = {
-        "fila": queue.Queue(maxsize=TAMANHO_MAXIMO_FILA),
-        "relatorio": [],
-        "status": "processando",
-        "total_paginas": None,
-        "conformes": 0,
-        "divergentes": 0,
-        "criada_em": datetime.now().isoformat(timespec="seconds"),
-        # Relógio monotônico: usado só para medir idade, imune a ajuste de horário.
-        "iniciada_em": time.monotonic(),
+    AUDITS[job_id] = {
+        "event_queue": queue.Queue(maxsize=MAX_QUEUE_SIZE),
+        "report": [],
+        "status": "processing",
+        "total_pages": None,
+        "matched": 0,
+        "mismatched": 0,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        # Use a monotonic clock for age calculations.
+        "started_at": time.monotonic(),
     }
-    _persistir(
-        armazenamento.registrar_auditoria,
-        job_id, AUDITORIAS[job_id]["criada_em"], dpi, boletos.filename, consulta.filename,
+    _persist(
+        storage.register_audit,
+        job_id, AUDITS[job_id]["created_at"], dpi, payment_slips.filename, reference.filename,
     )
 
     threading.Thread(
-        target=_executar_auditoria,
-        args=(job_id, caminho_boletos, caminho_consulta, dpi, pasta_temp),
+        target=_execute_audit,
+        args=(job_id, payment_slips_path, reference_path, dpi, temp_directory),
         daemon=True,
     ).start()
 
-    return AuditoriaCriada(job_id=job_id, mensagem="Auditoria iniciada. Acompanhe pelo endpoint de eventos.")
+    return AuditCreated(job_id=job_id, message="Audit started. Follow the events endpoint.")
 
 
-@app.get("/api/v1/auditorias", response_model=list[AuditoriaNoHistorico], tags=["Auditoria"])
-def listar_auditorias(limite: int = 50):
-    """Histórico das auditorias já realizadas, da mais recente para a mais antiga.
-
-    Sobrevive ao reinício do servidor — é a base para acompanhar a acurácia do
-    motor ao longo do tempo.
-    """
-    return [AuditoriaNoHistorico(**registro) for registro in armazenamento.listar_auditorias(limite)]
+@app.get("/api/v1/audits", response_model=list[AuditHistoryEntry], tags=["Audit"])
+def list_audits(limit: int = 50):
+    """List stored audits from newest to oldest."""
+    return [AuditHistoryEntry(**record) for record in storage.list_audits(limit)]
 
 
-@app.get("/api/v1/auditorias/{job_id}/eventos", tags=["Auditoria"])
-def acompanhar_auditoria(job_id: str):
-    """Transmite o resultado de cada página em tempo real (Server-Sent Events).
+@app.get("/api/v1/audits/{job_id}/events", tags=["Audit"])
+def stream_audit_events(job_id: str):
+    """Stream JSON events with type start, page, error, or end over SSE."""
+    audit = AUDITS.get(job_id)
+    if not audit:
+        raise HTTPException(status_code=404, detail="Audit not found.")
 
-    Cada mensagem é um JSON com `tipo` igual a `inicio`, `pagina`, `erro` ou `fim`.
-    """
-    auditoria = AUDITORIAS.get(job_id)
-    if not auditoria:
-        raise HTTPException(status_code=404, detail="Auditoria não encontrada.")
-
-    def gerar_eventos():
+    def generate_events():
         while True:
-            evento = auditoria["fila"].get()
-            if evento is _SENTINELA:
+            event = audit["event_queue"].get()
+            if event is _SENTINEL:
                 break
-            yield f"data: {json.dumps(evento, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
-        gerar_eventos(),
+        generate_events(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-@app.get("/api/v1/auditorias/{job_id}", response_model=ResumoAuditoria, tags=["Auditoria"])
-def consultar_auditoria(job_id: str):
-    """Situação atual de uma auditoria (útil para reconectar sem reprocessar).
-
-    Auditorias já descartadas da memória continuam respondendo aqui, reconstruídas
-    a partir do histórico.
-    """
-    auditoria = AUDITORIAS.get(job_id)
-    if auditoria:
-        return ResumoAuditoria(
+@app.get("/api/v1/audits/{job_id}", response_model=AuditSummary, tags=["Audit"])
+def get_audit(job_id: str):
+    """Return live progress, falling back to persisted history after expiration."""
+    audit = AUDITS.get(job_id)
+    if audit:
+        return AuditSummary(
             job_id=job_id,
-            status=auditoria["status"],
-            paginas_processadas=len(auditoria["relatorio"]),
-            total_paginas=auditoria["total_paginas"],
-            conformes=auditoria["conformes"],
-            divergentes=auditoria["divergentes"],
-            criada_em=auditoria["criada_em"],
+            status=audit["status"],
+            processed_pages=len(audit["report"]),
+            total_pages=audit["total_pages"],
+            matched=audit["matched"],
+            mismatched=audit["mismatched"],
+            created_at=audit["created_at"],
         )
 
-    registro = armazenamento.carregar_resumo(job_id)
-    if not registro:
-        raise HTTPException(status_code=404, detail="Auditoria não encontrada.")
-    return ResumoAuditoria(**registro)
+    record = storage.load_summary(job_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Audit not found.")
+    return AuditSummary(**record)
 
 
-@app.get("/api/v1/auditorias/{job_id}/paginas", tags=["Auditoria"])
-def listar_paginas(job_id: str):
-    """Linhas do relatório em JSON, para reabrir uma auditoria já encerrada.
+@app.get("/api/v1/audits/{job_id}/pages", tags=["Audit"])
+def list_pages(job_id: str):
+    """Return report rows for live or historical audits. Images are not persisted."""
+    audit = AUDITS.get(job_id)
+    if audit:
+        return audit["report"]
 
-    Mesmo conteúdo do CSV, no formato que a tabela do front-end consome. A imagem
-    anotada não vem junto: ela é gerada durante a conferência e não é persistida.
-    """
-    auditoria = AUDITORIAS.get(job_id)
-    if auditoria:
-        return auditoria["relatorio"]
-
-    if not armazenamento.carregar_resumo(job_id):
-        raise HTTPException(status_code=404, detail="Auditoria não encontrada.")
-    return armazenamento.carregar_relatorio(job_id)
+    if not storage.load_summary(job_id):
+        raise HTTPException(status_code=404, detail="Audit not found.")
+    return storage.load_report(job_id)
 
 
-@app.get("/api/v1/auditorias/{job_id}/relatorio.csv", tags=["Auditoria"])
-def baixar_relatorio(job_id: str):
-    """Baixa o relatório no mesmo formato gerado pelo script de linha de comando.
-
-    Funciona também para auditorias antigas: sem elas na memória, as linhas vêm do
-    histórico.
-    """
-    auditoria = AUDITORIAS.get(job_id)
-    if auditoria:
-        relatorio = auditoria["relatorio"]
+@app.get("/api/v1/audits/{job_id}/report.csv", tags=["Audit"])
+def download_report(job_id: str):
+    """Download CSV rows from memory or stored history."""
+    audit = AUDITS.get(job_id)
+    if audit:
+        report = audit["report"]
     else:
-        if not armazenamento.carregar_resumo(job_id):
-            raise HTTPException(status_code=404, detail="Auditoria não encontrada.")
-        relatorio = armazenamento.carregar_relatorio(job_id)
+        if not storage.load_summary(job_id):
+            raise HTTPException(status_code=404, detail="Audit not found.")
+        report = storage.load_report(job_id)
 
-    if not relatorio:
-        raise HTTPException(status_code=409, detail="Nenhuma página processada ainda.")
+    if not report:
+        raise HTTPException(status_code=409, detail="No pages processed yet.")
 
     buffer = io.StringIO()
-    pd.DataFrame(relatorio, columns=engine.COLUNAS_RELATORIO).to_csv(buffer, index=False, sep=";")
+    pd.DataFrame(report, columns=engine.REPORT_COLUMNS).to_csv(buffer, index=False, sep=";")
     return StreamingResponse(
         iter([buffer.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="Relatorio_{job_id}.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="Report_{job_id}.csv"'},
     )
 
 
-class ArquivosSemCache(StaticFiles):
-    """Serve o front-end obrigando o navegador a revalidar.
+class RevalidatedStaticFiles(StaticFiles):
+    """Require static-file revalidation so browser code follows local edits.
 
-    O front é editado direto no disco, sem build e sem versionamento no nome dos
-    arquivos. Sem este cabeçalho o navegador reaproveita o `app.js` antigo depois
-    de uma alteração, e a mudança simplesmente não aparece — sem erro nenhum, o que
-    torna a causa difícil de achar.
-
-    `no-cache` não desliga o cache: manda checar com o servidor antes de usar, então
-    o custo é uma requisição condicional, não o reenvio do arquivo.
-    """
+    The no-cache directive allows storage but requires revalidation before reuse."""
 
     async def get_response(self, path: str, scope):
-        resposta = await super().get_response(path, scope)
-        resposta.headers["Cache-Control"] = "no-cache"
-        return resposta
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
-# O front-end é servido pelo próprio FastAPI (sem build step / sem Node).
-app.mount("/", ArquivosSemCache(directory=f"{engine.BASE_DIR}/static", html=True), name="static")
+# Serve static assets directly with FastAPI; no build step is required.
+app.mount("/", RevalidatedStaticFiles(directory=f"{engine.BASE_DIR}/static", html=True), name="static")

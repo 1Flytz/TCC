@@ -1,369 +1,368 @@
 /**
- * PyConfer - front-end de acompanhamento.
+ * PyConfer live audit interface.
  *
- * Envia os PDFs para a API, abre uma conexão SSE e vai desenhando o resultado de
- * cada página conforme o motor de OCR termina de conferi-la.
+ * Upload PDFs, follow the SSE stream, and display each completed page.
  */
 
 const $ = (id) => document.getElementById(id);
 
-const formulario = $("formulario");
-const botaoIniciar = $("botao-iniciar");
-const aviso = $("aviso");
-const painel = $("painel");
-const corpoTabela = $("corpo-tabela");
-const visor = $("visor");
-const barra = $("barra");
-const situacao = $("situacao");
+const auditForm = $("auditForm");
+const startButton = $("start-button");
+const notice = $("notice");
+const panel = $("panel");
+const tableBody = $("body-table");
+const viewer = $("viewer");
+const progressBar = $("progressBar");
+const statusText = $("statusText");
 
-// Guarda a imagem anotada de cada página para permitir revisitar linhas da tabela.
-const paginas = new Map();
-let contadores = { processadas: 0, conformes: 0, divergentes: 0, total: null };
-let fonteEventos = null;
+// Keep annotated page images available when revisiting report rows.
+const pages = new Map();
+let counters = { processed: 0, matched: 0, mismatched: 0, total: null };
+let eventSource = null;
 
 let timerInterval = null;
-let tempoDecorrido = 0;
+let elapsedSeconds = 0;
 
-formulario.addEventListener("submit", async (evento) => {
-  evento.preventDefault();
-  aviso.textContent = "";
+auditForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  notice.textContent = "";
 
-  const dados = new FormData(formulario);
-  const dpi = dados.get("dpi") || 500;
-  dados.delete("dpi");
+  const data = new FormData(auditForm);
+  const dpi = data.get("dpi") || 500;
+  data.delete("dpi");
 
-  botaoIniciar.disabled = true;
-  botaoIniciar.textContent = "Enviando documentos…";
+  startButton.disabled = true;
+  startButton.textContent = "Uploading documents…";
 
   try {
-    const resposta = await fetch(`/api/v1/auditorias?dpi=${dpi}`, { method: "POST", body: dados });
-    if (!resposta.ok) {
-      const erro = await resposta.json().catch(() => ({}));
-      throw new Error(erro.detail || `Falha ao iniciar (HTTP ${resposta.status}).`);
+    const response = await fetch(`/api/v1/audits?dpi=${dpi}`, { method: "POST", body: data });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `Failed to start (HTTP ${response.status}).`);
     }
-    const { job_id } = await resposta.json();
-    reiniciarPainel();
-    acompanhar(job_id);
-  } catch (erro) {
-    aviso.textContent = erro.message;
-    botaoIniciar.disabled = false;
-    botaoIniciar.textContent = "Iniciar auditoria";
+    const { job_id } = await response.json();
+    resetPanel();
+    followAudit(job_id);
+  } catch (error) {
+    notice.textContent = error.message;
+    startButton.disabled = false;
+    startButton.textContent = "Start audit";
   }
 });
 
-function reiniciarPainel() {
+function resetPanel() {
   clearInterval(timerInterval);
-  tempoDecorrido = 0;
-  if ($("ind-tempo")) $("ind-tempo").textContent = "00:00";
-  paginas.clear();
-  corpoTabela.innerHTML = "";
-  contadores = { processadas: 0, conformes: 0, divergentes: 0, total: null };
-  atualizarIndicadores();
-  barra.style.width = "0%";
-  visor.innerHTML = '<p class="vazio">Aguardando a primeira página…</p>';
-  $("comparativo").hidden = true;
-  $("etiqueta-estrategia").hidden = true;
-  $("legenda-visor").hidden = true;
+  elapsedSeconds = 0;
+  if ($("ind-time")) $("ind-time").textContent = "00:00";
+  pages.clear();
+  tableBody.innerHTML = "";
+  counters = { processed: 0, matched: 0, mismatched: 0, total: null };
+  updateIndicators();
+  progressBar.style.width = "0%";
+  viewer.innerHTML = '<p class="empty">Waiting for the first page…</p>';
+  $("comparison").hidden = true;
+  $("tag-strategy").hidden = true;
+  $("caption-viewer").hidden = true;
   $("link-csv").hidden = true;
-  
-  painel.hidden = false;
-  painel.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  panel.hidden = false;
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function acompanhar(jobId) {
-  situacao.textContent = "Convertendo o PDF e lendo a lista mestre…";
-  botaoIniciar.textContent = "Auditoria em andamento…";
+function followAudit(jobId) {
+  statusText.textContent = "Rendering the PDF and reading the reference list…";
+  startButton.textContent = "Audit in progress…";
 
   timerInterval = setInterval(() => {
-    tempoDecorrido++;
-    const m = String(Math.floor(tempoDecorrido / 60)).padStart(2, '0');
-    const s = String(tempoDecorrido % 60).padStart(2, '0');
-    if ($("ind-tempo")) $("ind-tempo").textContent = `${m}:${s}`;
+    elapsedSeconds++;
+    const m = String(Math.floor(elapsedSeconds / 60)).padStart(2, '0');
+    const s = String(elapsedSeconds % 60).padStart(2, '0');
+    if ($("ind-time")) $("ind-time").textContent = `${m}:${s}`;
   }, 1000);
 
-  fonteEventos = new EventSource(`/api/v1/auditorias/${jobId}/eventos`);
+  eventSource = new EventSource(`/api/v1/audits/${jobId}/events`);
 
-  fonteEventos.onmessage = (mensagem) => {
-    const evento = JSON.parse(mensagem.data);
+  eventSource.onmessage = (message) => {
+    const event = JSON.parse(message.data);
 
-    if (evento.tipo === "inicio") {
-      contadores.total = evento.total_paginas;
-      situacao.textContent = `${evento.total_paginas} guias encontradas · ${evento.total_consulta} lançamentos na consulta · ${evento.dpi} DPI`;
-      if ($("nome-modelo")) $("nome-modelo").textContent = `${evento.dpi} DPI`;
-      atualizarIndicadores();
-    } else if (evento.tipo === "pagina") {
-      registrarPagina(evento);
-    } else if (evento.tipo === "erro") {
-      situacao.textContent = "";
-      aviso.textContent = evento.mensagem;
-      encerrar(jobId, false);
-    } else if (evento.tipo === "fim") {
-      situacao.textContent = `Auditoria concluída — ${contadores.processadas} guias conferidas.`;
-      encerrar(jobId, true);
+    if (event.type === "start") {
+      counters.total = event.total_pages;
+      statusText.textContent = `${event.total_pages} slips found · ${event.reference_count} reference entries · ${event.dpi} DPI`;
+      if ($("active-resolution")) $("active-resolution").textContent = `${event.dpi} DPI`;
+      updateIndicators();
+    } else if (event.type === "page") {
+      registerPage(event);
+    } else if (event.type === "error") {
+      statusText.textContent = "";
+      notice.textContent = event.message;
+      finishAudit(jobId, false);
+    } else if (event.type === "end") {
+      statusText.textContent = `Audit completed — ${counters.processed} slips checked.`;
+      finishAudit(jobId, true);
     }
   };
 
-  fonteEventos.onerror = () => {
-    // O navegador tentaria reconectar sozinho e reprocessar; encerramos explicitamente.
-    if (fonteEventos && fonteEventos.readyState === EventSource.CLOSED) {
-      encerrar(jobId, contadores.processadas > 0);
+  eventSource.onerror = () => {
+    // Close the session explicitly when the event stream has closed.
+    if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+      finishAudit(jobId, counters.processed > 0);
     }
   };
 }
 
-function encerrar(jobId, houveResultado) {
-  clearInterval(timerInterval); 
-  if (fonteEventos) { 
-    fonteEventos.close(); 
-    fonteEventos = null; 
+function finishAudit(jobId, hasResults) {
+  clearInterval(timerInterval);
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
   }
-  botaoIniciar.disabled = false;
-  botaoIniciar.textContent = "Iniciar nova auditoria";
-  if (houveResultado) {
-    mostrarLinkCsv(jobId);
+  startButton.disabled = false;
+  startButton.textContent = "Start new audit";
+  if (hasResults) {
+    showCsvLink(jobId);
   }
-  carregarHistorico();
+  loadHistory();
 }
 
-function mostrarLinkCsv(jobId) {
+function showCsvLink(jobId) {
   const link = $("link-csv");
-  link.href = `/api/v1/auditorias/${jobId}/relatorio.csv`;
+  link.href = `/api/v1/audits/${jobId}/report.csv`;
   link.hidden = false;
 }
 
 /* =========================================================
-   Histórico — auditorias já encerradas, vindas do banco
+   History — stored audit results
    ========================================================= */
 
-const ROTULOS_SITUACAO = {
-  concluida: ["Concluída", "ok"],
-  processando: ["Em andamento", ""],
-  abandonada: ["Interrompida", ""],
-  erro: ["Falhou", "erro"],
+const STATUS_LABELS = {
+  completed: ["Completed", "ok"],
+  processing: ["In progress", ""],
+  abandoned: ["Interrupted", ""],
+  error: ["Failed", "error"],
 };
 
-function formatarMomento(iso) {
+function formatTimestamp(iso) {
   const data = new Date(iso);
   if (isNaN(data)) return iso;
-  const doisDigitos = (n) => String(n).padStart(2, "0");
-  return `${doisDigitos(data.getDate())}/${doisDigitos(data.getMonth() + 1)}/${data.getFullYear()}` +
-    ` ${doisDigitos(data.getHours())}:${doisDigitos(data.getMinutes())}`;
+  const twoDigits = (n) => String(n).padStart(2, "0");
+  return `${twoDigits(data.getDate())}/${twoDigits(data.getMonth() + 1)}/${data.getFullYear()}` +
+    ` ${twoDigits(data.getHours())}:${twoDigits(data.getMinutes())}`;
 }
 
-async function carregarHistorico() {
-  let auditorias;
+async function loadHistory() {
+  let audits;
   try {
-    const resposta = await fetch("/api/v1/auditorias");
-    if (!resposta.ok) return;
-    auditorias = await resposta.json();
+    const response = await fetch("/api/v1/audits");
+    if (!response.ok) return;
+    audits = await response.json();
   } catch {
-    return; // histórico é acessório: se falhar, a conferência continua utilizável
+    return; // history failure must not block live verification
   }
 
-  const corpo = $("corpo-historico");
-  corpo.innerHTML = "";
-  $("cartao-historico").hidden = auditorias.length === 0;
+  const body = $("body-history");
+  body.innerHTML = "";
+  $("history-card").hidden = audits.length === 0;
 
-  for (const auditoria of auditorias) {
-    const avaliadas = auditoria.conformes + auditoria.divergentes;
-    const taxa = avaliadas ? `${((auditoria.conformes / avaliadas) * 100).toFixed(1)}%` : "—";
-    const [rotulo, classe] = ROTULOS_SITUACAO[auditoria.status] || [auditoria.status, ""];
+  for (const audit of audits) {
+    const evaluated = audit.matched + audit.mismatched;
+    const rate = evaluated ? `${((audit.matched / evaluated) * 100).toFixed(1)}%` : "—";
+    const [label, className] = STATUS_LABELS[audit.status] || [audit.status, ""];
 
     const tr = document.createElement("tr");
-    tr.className = "linha-historico";
+    tr.className = "row-history";
     tr.innerHTML = `
-      <td>${formatarMomento(auditoria.criada_em)}</td>
-      <td><span class="selo ${classe}">${rotulo}</span></td>
-      <td>${auditoria.paginas_processadas}${auditoria.total_paginas ? ` / ${auditoria.total_paginas}` : ""}</td>
-      <td>${auditoria.conformes}</td>
-      <td class="${auditoria.divergentes ? "divergencia" : ""}">${auditoria.divergentes}</td>
-      <td>${taxa}</td>
+      <td>${formatTimestamp(audit.created_at)}</td>
+      <td><span class="badge ${className}">${label}</span></td>
+      <td>${audit.processed_pages}${audit.total_pages ? ` / ${audit.total_pages}` : ""}</td>
+      <td>${audit.matched}</td>
+      <td class="${audit.mismatched ? "discrepancy" : ""}">${audit.mismatched}</td>
+      <td>${rate}</td>
     `;
-    tr.addEventListener("click", () => abrirAuditoria(auditoria));
-    corpo.appendChild(tr);
+    tr.addEventListener("click", () => openAudit(audit));
+    body.appendChild(tr);
   }
 }
 
-async function abrirAuditoria(auditoria) {
-  if (fonteEventos) return; // não atropela uma conferência em andamento
+async function openAudit(audit) {
+  if (eventSource) return; // preserve the active audit session
 
-  let linhas;
+  let rows;
   try {
-    const resposta = await fetch(`/api/v1/auditorias/${auditoria.job_id}/paginas`);
-    if (!resposta.ok) throw new Error("Não foi possível carregar essa auditoria.");
-    linhas = await resposta.json();
-  } catch (erro) {
-    aviso.textContent = erro.message;
+    const response = await fetch(`/api/v1/audits/${audit.job_id}/pages`);
+    if (!response.ok) throw new Error("Could not load this audit.");
+    rows = await response.json();
+  } catch (error) {
+    notice.textContent = error.message;
     return;
   }
 
-  reiniciarPainel();
-  contadores.total = auditoria.total_paginas;
+  resetPanel();
+  counters.total = audit.total_pages;
 
-  for (const linha of linhas) {
-    // As páginas do histórico não têm imagem: só o motor a produz, ao vivo.
-    const evento = { pagina: linha["Pagina"], linha };
-    const divergente = linha["Status Geral"] === "ERRO";
+  for (const row of rows) {
+    // Historical rows have no images; previews are generated only during a live audit.
+    const event = { page: row["Page"], row };
+    const mismatch = row["Overall Status"] === "ERROR";
 
-    contadores.processadas += 1;
-    if (linha["Status Geral"] === "OK") contadores.conformes += 1;
-    if (divergente) contadores.divergentes += 1;
+    counters.processed += 1;
+    if (row["Overall Status"] === "OK") counters.matched += 1;
+    if (mismatch) counters.mismatched += 1;
 
-    paginas.set(evento.pagina, evento);
-    adicionarLinha(evento, divergente);
+    pages.set(event.page, event);
+    addRow(event, mismatch);
   }
 
-  atualizarIndicadores();
-  barra.style.width = "100%";
-  situacao.textContent = `Auditoria de ${formatarMomento(auditoria.criada_em)} — ` +
-    `${contadores.processadas} guias, reaberta do histórico.`;
+  updateIndicators();
+  progressBar.style.width = "100%";
+  statusText.textContent = `Audit from ${formatTimestamp(audit.created_at)} — ` +
+    `${counters.processed} slips, reopened from history.`;
 
-  if (linhas.length) {
-    mostrarLinkCsv(auditoria.job_id);
-    mostrarPagina(linhas[0]["Pagina"]);
+  if (rows.length) {
+    showCsvLink(audit.job_id);
+    showPage(rows[0]["Page"]);
   }
 
-  // Depois de mostrarPagina, que sobrescreveria o visor com o aviso genérico.
-  visor.innerHTML = '<p class="vazio">A imagem com os destaques do OCR não é guardada:<br>' +
-    'ela aparece apenas durante a conferência ao vivo.</p>';
-  $("legenda-visor").hidden = true;
+  // Replace the generic preview message after displaying the first historical row.
+  viewer.innerHTML = '<p class="empty">Annotated OCR images are not stored:<br>' +
+    'they are available only during live verification.</p>';
+  $("caption-viewer").hidden = true;
 }
 
-$("botao-atualizar-historico").addEventListener("click", carregarHistorico);
-carregarHistorico();
+$("refresh-history-button").addEventListener("click", loadHistory);
+loadHistory();
 
-function registrarPagina(evento) {
-  const linha = evento.linha;
-  const divergente = linha["Status Geral"] === "ERRO";
+function registerPage(event) {
+  const row = event.row;
+  const mismatch = row["Overall Status"] === "ERROR";
 
-  contadores.processadas += 1;
-  if (linha["Status Geral"] === "OK") contadores.conformes += 1;
-  if (divergente) contadores.divergentes += 1;
-  atualizarIndicadores();
+  counters.processed += 1;
+  if (row["Overall Status"] === "OK") counters.matched += 1;
+  if (mismatch) counters.mismatched += 1;
+  updateIndicators();
 
-  if (contadores.total) {
-    barra.style.width = `${(contadores.processadas / contadores.total) * 100}%`;
-    situacao.textContent = `Conferindo… página ${evento.pagina} de ${contadores.total}`;
+  if (counters.total) {
+    progressBar.style.width = `${(counters.processed / counters.total) * 100}%`;
+    statusText.textContent = `Checking… page ${event.page} of ${counters.total}`;
   }
 
-  paginas.set(evento.pagina, evento);
-  adicionarLinha(evento, divergente);
-  mostrarPagina(evento.pagina);
+  pages.set(event.page, event);
+  addRow(event, mismatch);
+  showPage(event.page);
 }
 
-function adicionarLinha(evento, divergente) {
-  const linha = evento.linha;
+function addRow(event, mismatch) {
+  const row = event.row;
   const tr = document.createElement("tr");
-  tr.dataset.pagina = evento.pagina;
-  tr.dataset.divergente = divergente ? "1" : "0";
-  if (divergente) tr.classList.add("divergente");
-  if ($("filtro-divergencias").checked && !divergente) tr.hidden = true;
+  tr.dataset.page = event.page;
+  tr.dataset.mismatch = mismatch ? "1" : "0";
+  if (mismatch) tr.classList.add("mismatch");
+  if ($("mismatch-filter").checked && !mismatch) tr.hidden = true;
 
-  const codigoDiverge = linha["Status Codigo"] !== "OK";
-  const valorDiverge = linha["Status Valor"] !== "OK";
+  const codeMismatch = row["Code Status"] !== "OK";
+  const amountMismatch = row["Amount Status"] !== "OK";
 
   tr.innerHTML = `
-    <td>${evento.pagina}</td>
-    <td>${linha["Codigo (PDF Consulta)"]}</td>
-    <td class="${codigoDiverge ? "divergencia" : ""}">${linha["Codigo (OCR Boletos)"]}</td>
-    <td>${linha["Valor (PDF Consulta)"]}</td>
-    <td class="${valorDiverge ? "divergencia" : ""}">${linha["Valor (OCR Boletos)"]}</td>
-    <td>${selo(linha["Status Geral"])}${etiquetaNatureza(linha["Natureza"])}</td>
+    <td>${event.page}</td>
+    <td>${row["Code (Reference PDF)"]}</td>
+    <td class="${codeMismatch ? "discrepancy" : ""}">${row["Code (OCR Slips)"]}</td>
+    <td>${row["Amount (Reference PDF)"]}</td>
+    <td class="${amountMismatch ? "discrepancy" : ""}">${row["Amount (OCR Slips)"]}</td>
+    <td>${badge(row["Overall Status"])}${categoryBadge(row["Category"])}</td>
   `;
 
-  tr.addEventListener("click", () => mostrarPagina(evento.pagina));
-  corpoTabela.appendChild(tr);
+  tr.addEventListener("click", () => showPage(event.page));
+  tableBody.appendChild(tr);
 }
 
-function selo(status) {
-  const classe = status === "OK" ? "ok" : status === "ERRO" ? "erro" : "";
-  const texto = status === "ERRO" ? "Divergente" : status === "OK" ? "Conforme" : status;
-  return `<span class="selo ${classe}">${texto}</span>`;
+function badge(status) {
+  const className = status === "OK" ? "ok" : status === "ERROR" ? "error" : "";
+  const text = status === "ERROR" ? "Mismatch" : status === "OK" ? "Match" : status;
+  return `<span class="badge ${className}">${text}</span>`;
 }
 
-// Natureza da divergência: o que o operador precisa fazer a respeito.
-const NATUREZAS = {
-  "OUTRO CADASTRO": ["Outro cadastro", "grave", "O código lido pertence a outra guia deste lote — pode ser guia trocada."],
-  "NAO LIDO": ["Não lido", "", "O OCR não extraiu o dado. Reescanear ou aumentar o DPI costuma resolver."],
-  "VERIFICAR": ["Verificar", "", "Leu algo que não corresponde ao esperado nem a outro cadastro do lote."],
+// Discrepancy categories and suggested operator actions.
+const CATEGORIES = {
+  "OTHER REGISTRATION": ["Other registration", "severe", "The code belongs to another slip in this batch — check for a swapped slip."],
+  "UNREAD": ["Unread", "", "OCR did not extract this field. Inspect scan quality or try a higher DPI."],
+  "REVIEW": ["Review", "", "The reading matches neither the expected value nor another registration in this batch."],
 };
 
-function etiquetaNatureza(natureza) {
-  const info = NATUREZAS[natureza];
+function categoryBadge(category) {
+  const info = CATEGORIES[category];
   if (!info) return "";
-  const [texto, classe, explicacao] = info;
-  return `<span class="natureza ${classe}" title="${explicacao}">${texto}</span>`;
+  const [text, className, explanation] = info;
+  return `<span class="category ${className}" title="${explanation}">${text}</span>`;
 }
 
-function mostrarPagina(numero) {
-  const evento = paginas.get(numero);
-  if (!evento) return;
-  const linha = evento.linha;
+function showPage(number) {
+  const event = pages.get(number);
+  if (!event) return;
+  const row = event.row;
 
-  document.querySelectorAll("#corpo-tabela tr").forEach((tr) => {
-    tr.classList.toggle("selecionada", Number(tr.dataset.pagina) === numero);
+  document.querySelectorAll("#body-table tr").forEach((tr) => {
+    tr.classList.toggle("selected", Number(tr.dataset.page) === number);
   });
 
-  $("comparativo").hidden = false;
-  $("cmp-cod-esperado").textContent = linha["Codigo (PDF Consulta)"];
-  $("cmp-cod-lido").textContent = linha["Codigo (OCR Boletos)"];
-  $("cmp-cod-selo").outerHTML = selo(linha["Status Codigo"]).replace('class="selo', 'id="cmp-cod-selo" class="selo');
-  $("cmp-val-esperado").textContent = linha["Valor (PDF Consulta)"];
-  $("cmp-val-lido").textContent = linha["Valor (OCR Boletos)"];
-  $("cmp-val-selo").outerHTML = selo(linha["Status Valor"]).replace('class="selo', 'id="cmp-val-selo" class="selo');
+  $("comparison").hidden = false;
+  $("cmp-code-expected").textContent = row["Code (Reference PDF)"];
+  $("cmp-code-read").textContent = row["Code (OCR Slips)"];
+  $("cmp-code-badge").outerHTML = badge(row["Code Status"]).replace('class="badge', 'id="cmp-code-badge" class="badge');
+  $("cmp-amount-expected").textContent = row["Amount (Reference PDF)"];
+  $("cmp-amount-read").textContent = row["Amount (OCR Slips)"];
+  $("cmp-amount-badge").outerHTML = badge(row["Amount Status"]).replace('class="badge', 'id="cmp-amount-badge" class="badge');
 
-  const explicacao = $("explicacao-natureza");
-  const infoNatureza = NATUREZAS[linha["Natureza"]];
-  if (infoNatureza) {
-    const [texto, classe, detalhe] = infoNatureza;
-    explicacao.className = `explicacao-natureza ${classe}`;
-    explicacao.innerHTML = `<strong>${texto}:</strong> ${detalhe}`;
-    explicacao.hidden = false;
+  const explanation = $("explanation-category");
+  const categoryInfo = CATEGORIES[row["Category"]];
+  if (categoryInfo) {
+    const [text, className, detail] = categoryInfo;
+    explanation.className = `explanation-category ${className}`;
+    explanation.innerHTML = `<strong>${text}:</strong> ${detail}`;
+    explanation.hidden = false;
   } else {
-    explicacao.hidden = true;
+    explanation.hidden = true;
   }
 
-  const etiqueta = $("etiqueta-estrategia");
-  if (evento.estrategia) {
-    etiqueta.textContent = `Estratégia vencedora: ${evento.estrategia}`;
-    etiqueta.hidden = false;
+  const tag = $("tag-strategy");
+  if (event.strategy) {
+    tag.textContent = `Winning strategy: ${event.strategy}`;
+    tag.hidden = false;
   } else {
-    etiqueta.hidden = true;
+    tag.hidden = true;
   }
 
-  if (evento.imagem) {
-    visor.innerHTML = `<img src="${evento.imagem}" alt="Guia da página ${numero} com os trechos lidos destacados">`;
+  if (event.image) {
+    viewer.innerHTML = `<img src="${event.image}" alt="Slip on page ${number} with extracted fields highlighted">`;
   } else {
-    visor.innerHTML = '<p class="vazio">Imagem indisponível para esta página.</p>';
+    viewer.innerHTML = '<p class="empty">Image unavailable for this page.</p>';
   }
 
-  const legenda = $("legenda-visor");
-  const naoLocalizados = [];
-  if (!evento.achou_codigo) naoLocalizados.push("código");
-  if (!evento.achou_valor) naoLocalizados.push("valor");
-  if (naoLocalizados.length) {
-    legenda.textContent = `Não foi possível marcar a posição de: ${naoLocalizados.join(" e ")} — o texto foi lido, mas o OCR não devolveu coordenadas confiáveis.`;
-    legenda.hidden = false;
+  const caption = $("caption-viewer");
+  const notLocated = [];
+  if (!event.code_found) notLocated.push("code");
+  if (!event.amount_found) notLocated.push("amount");
+  if (notLocated.length) {
+    caption.textContent = `Could not locate: ${notLocated.join(" and ")} — the text was read, but OCR did not return reliable coordinates.`;
+    caption.hidden = false;
   } else {
-    legenda.hidden = true;
+    caption.hidden = true;
   }
 }
 
-function atualizarIndicadores() {
-  $("ind-processadas").textContent = contadores.total
-    ? `${contadores.processadas}/${contadores.total}`
-    : contadores.processadas;
-  $("ind-conformes").textContent = contadores.conformes;
-  $("ind-divergentes").textContent = contadores.divergentes;
-  const avaliadas = contadores.conformes + contadores.divergentes;
-  $("ind-precisao").textContent = avaliadas
-    ? `${((contadores.conformes / avaliadas) * 100).toFixed(1)}%`
+function updateIndicators() {
+  $("ind-processed").textContent = counters.total
+    ? `${counters.processed}/${counters.total}`
+    : counters.processed;
+  $("ind-matched").textContent = counters.matched;
+  $("ind-mismatched").textContent = counters.mismatched;
+  const evaluated = counters.matched + counters.mismatched;
+  $("ind-match-rate").textContent = evaluated
+    ? `${((counters.matched / evaluated) * 100).toFixed(1)}%`
     : "—";
 }
 
-$("filtro-divergencias").addEventListener("change", (evento) => {
-  const somenteDivergencias = evento.target.checked;
-  document.querySelectorAll("#corpo-tabela tr").forEach((tr) => {
-    tr.hidden = somenteDivergencias && tr.dataset.divergente !== "1";
+$("mismatch-filter").addEventListener("change", (event) => {
+  const onlyMismatches = event.target.checked;
+  document.querySelectorAll("#body-table tr").forEach((tr) => {
+    tr.hidden = onlyMismatches && tr.dataset.mismatch !== "1";
   });
 });
